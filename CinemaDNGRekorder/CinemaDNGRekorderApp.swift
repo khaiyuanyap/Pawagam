@@ -216,8 +216,8 @@ struct CameraPreview: UIViewRepresentable {
 // MARK: - Camera Manager
 class CameraManager: NSObject, ObservableObject {
     // Increased buffer size
-    private let maxBufferSize = 500  // Up from 100
-    private let maxMemoryFrames = 100  // Keep only recent frames in memory
+    private let maxBufferSize = 50000  // Up from 100
+    private let maxMemoryFrames = 10000  // Keep only recent frames in memory
 
     // New buffer management properties
     private var frameDataCache = [Int: Data]()
