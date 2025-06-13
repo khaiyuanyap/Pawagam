@@ -12,8 +12,11 @@ import SwiftUI
 // MARK: - App Delegate for Orientation Lock
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.portrait
-    
-    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
         return AppDelegate.orientationLock
     }
 }
@@ -22,7 +25,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct DNGCameraApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -57,6 +60,9 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundColor(.white)
                         Text("Format: \(cameraManager.pixelFormatName)")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                        Text("Crop: \(cameraManager.cropFactorText)")
                             .font(.caption)
                             .foregroundColor(.white)
                     }
@@ -215,6 +221,10 @@ struct CameraPreview: UIViewRepresentable {
 
 // MARK: - Camera Manager
 class CameraManager: NSObject, ObservableObject {
+    // Add crop factor property
+    @Published var cropFactorText = "1.0x"
+    private var currentCropFactor: Double = 1.0
+
     // Increased buffer size
     private let maxBufferSize = 50000  // Up from 100
     private let maxMemoryFrames = 10000  // Keep only recent frames in memory
@@ -250,9 +260,9 @@ class CameraManager: NSObject, ObservableObject {
     private let finishQueue = DispatchQueue(
         label: "com.cinemadngrekorder.finish")
     private let maxWaitTime: TimeInterval = 10.0
-    
-    @Published var isWarmingUp = false // NEW: Track warm-up state
-    private var warmUpTimer: Timer?    // NEW: Timer for warm-up period
+
+    @Published var isWarmingUp = false  // NEW: Track warm-up state
+    private var warmUpTimer: Timer?  // NEW: Timer for warm-up period
 
     // MARK: - Published Properties
     @Published var isCapturing = false
@@ -600,43 +610,43 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         // Reset pipeline state
-                isWarmingUp = true // NEW: Start in warm-up mode
-                isCapturing = false
-                isFinishing = false
-                captureCount = 0
-                errorCount = 0
-                nextFrameID = 1
-                lastSavedFrameID = 0
-                frameBuffer.removeAll()
-                captureGroup = DispatchGroup()
-                updateStatusText("Warming Up...") // NEW: Update status
-                updatePipelineStatus()
+        isWarmingUp = true  // NEW: Start in warm-up mode
+        isCapturing = false
+        isFinishing = false
+        captureCount = 0
+        errorCount = 0
+        nextFrameID = 1
+        lastSavedFrameID = 0
+        frameBuffer.removeAll()
+        captureGroup = DispatchGroup()
+        updateStatusText("Warming Up...")  // NEW: Update status
+        updatePipelineStatus()
 
-                // Start high-speed capture timer
-                let timer = DispatchSource.makeTimerSource(
-                    queue: DispatchQueue(label: "com.cinemadngrekorder.capturetimer"))
-                timer.schedule(
-                    deadline: .now(), repeating: captureInterval,
-                    leeway: .milliseconds(1))
-                timer.setEventHandler { [weak self] in
-                    self?.capturePhoto()
-                }
-                timer.resume()
-                captureTimer = timer
+        // Start high-speed capture timer
+        let timer = DispatchSource.makeTimerSource(
+            queue: DispatchQueue(label: "com.cinemadngrekorder.capturetimer"))
+        timer.schedule(
+            deadline: .now(), repeating: captureInterval,
+            leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.capturePhoto()
+        }
+        timer.resume()
+        captureTimer = timer
 
-                // NEW: Set warm-up timer to transition after 5 seconds
-                DispatchQueue.main.async {
-                    self.warmUpTimer = Timer.scheduledTimer(
-                        withTimeInterval: 10.0,
-                        repeats: false
-                    ) { [weak self] _ in
-                        guard let self = self else { return }
-                        self.isWarmingUp = false
-                        self.isCapturing = true
-                        self.updateStatusText("Capturing...")
-                        print("Warm-up complete. Starting actual capture.")
-                    }
-                }
+        // NEW: Set warm-up timer to transition after 5 seconds
+        DispatchQueue.main.async {
+            self.warmUpTimer = Timer.scheduledTimer(
+                withTimeInterval: 10.0,
+                repeats: false
+            ) { [weak self] _ in
+                guard let self = self else { return }
+                self.isWarmingUp = false
+                self.isCapturing = true
+                self.updateStatusText("Capturing...")
+                print("Warm-up complete. Starting actual capture.")
+            }
+        }
     }
 
     // MARK: - Stop Capture Logic
@@ -646,23 +656,22 @@ class CameraManager: NSObject, ObservableObject {
         // Cancel warm-up if active
         warmUpTimer?.invalidate()
         warmUpTimer = nil
-        
-        if isWarmingUp {
-                    // Delete warm-up directory if capture was stopped during warm-up
-                    if let captureDir = captureDirectory {
-                        do {
-                            try FileManager.default.removeItem(at: captureDir)
-                            print("Deleted warm-up directory: \(captureDir.path)")
-                        } catch {
-                            print("Error deleting warm-up directory: \(error)")
-                        }
-                    }
-                    
-                    isWarmingUp = false
-                    updateStatusText("Ready")
-                    return
-                }
 
+        if isWarmingUp {
+            // Delete warm-up directory if capture was stopped during warm-up
+            if let captureDir = captureDirectory {
+                do {
+                    try FileManager.default.removeItem(at: captureDir)
+                    print("Deleted warm-up directory: \(captureDir.path)")
+                } catch {
+                    print("Error deleting warm-up directory: \(error)")
+                }
+            }
+
+            isWarmingUp = false
+            updateStatusText("Ready")
+            return
+        }
 
         isCapturing = false
         isFinishing = true
@@ -706,62 +715,84 @@ class CameraManager: NSObject, ObservableObject {
                 self.showCaptureComplete = true
             }
         }
-        
-        warmUpTimer?.invalidate() // NEW: Cancel warm-up if stopping
-               warmUpTimer = nil
+
+        warmUpTimer?.invalidate()  // NEW: Cancel warm-up if stopping
+        warmUpTimer = nil
+
+        DispatchQueue.main.async {
+            self.cropFactorText = "1.0x"
+        }
     }
 
     private func capturePhoto() {
         // NEW: Skip buffer check during warm-up
-                if isCapturing {  // Only check buffer during actual capture
-                    bufferLock.lock()
-                    let currentBufferSize = frameBuffer.count
-                    bufferLock.unlock()
+        if isCapturing {  // Only check buffer during actual capture
+            bufferLock.lock()
+            let currentBufferSize = frameBuffer.count
+            bufferLock.unlock()
 
-                    if currentBufferSize >= maxBufferSize {
-                        print("Skipping capture: buffer full (\(currentBufferSize)/\(maxBufferSize))")
-                        return
-                    }
-                }
+            if currentBufferSize >= maxBufferSize {
+                print(
+                    "Skipping capture: buffer full (\(currentBufferSize)/\(maxBufferSize))"
+                )
+                return
+            }
+        }
 
-
+        
         captureSerialQueue.async {
-
             // Check buffer size
             self.bufferLock.lock()
             let currentBufferSize = self.frameBuffer.count
             self.bufferLock.unlock()
 
-            // Skip if buffer full or system busy
             if currentBufferSize >= self.maxBufferSize {
-                print(
-                    "Skipping capture: buffer full (\(currentBufferSize)/\(self.maxBufferSize))"
-                )
+                print("Skipping capture: buffer full (\(currentBufferSize)/\(self.maxBufferSize))")
                 return
             }
 
-            // Create photo settings with the supported raw pixel format
-            let photoSettings: AVCapturePhotoSettings
-
-            if self.supportedRawPixelFormats.isEmpty {
-                // Fallback to JPEG if no raw formats available
-                photoSettings = AVCapturePhotoSettings()
-                print("Falling back to JPEG capture")
-            } else {
-                // Use supported raw format
-                photoSettings = AVCapturePhotoSettings(
-                    rawPixelFormatType: self.selectedRawPixelFormat
-                )
+            // Calculate crop factor based on target FPS
+            let cropFactor: Double
+            switch self.targetFPS {
+            case 20: cropFactor = 1.0
+            case 24: cropFactor = 1.5
+            default:
+                // Linear interpolation between 20-24 FPS
+                cropFactor = min(1.5, max(1.0, 1.0 + (Double(self.targetFPS) - 20.0) * 0.125))
+            }
+            
+            DispatchQueue.main.async {
+                self.cropFactorText = String(format: "%.1fx", cropFactor)
             }
 
-            // Configure settings for speed
-            photoSettings.isHighResolutionPhotoEnabled = false
-            photoSettings.flashMode = .off
+            // Get dimensions - CORRECTED VERSION
+            guard let fullDimensions = self.captureDevice.activeFormat.supportedMaxPhotoDimensions.max(by: { $0.width * $0.height < $1.width * $1.height }) else {
+                print("Failed to get max photo dimensions")
+                return
+            }
 
-            // Capture photo
+            // CORRECTED CROP CALCULATION
+            let croppedWidth = Int32(Double(fullDimensions.width) / cropFactor)
+            let croppedHeight = Int32(Double(fullDimensions.height) / cropFactor)
+            let croppedDimensions = CMVideoDimensions(width: croppedWidth, height: croppedHeight)
+
+            // Create settings
+            let settings: AVCapturePhotoSettings
+            if self.supportedRawPixelFormats.isEmpty {
+                settings = AVCapturePhotoSettings()
+                print("Falling back to JPEG capture")
+            } else {
+                settings = AVCapturePhotoSettings(rawPixelFormatType: self.selectedRawPixelFormat)
+            }
+
+            // Configure settings
+            settings.maxPhotoDimensions = croppedDimensions
+            settings.isHighResolutionPhotoEnabled = false
+            settings.flashMode = .off
+
+            // Capture
             DispatchQueue.main.async {
-                self.photoOutput.capturePhoto(
-                    with: photoSettings, delegate: self)
+                self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
     }
@@ -868,34 +899,35 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     // MARK: - Buffer Enhancements
-        private func saveDNGData(_ dngData: Data, frameID: Int) {
-            guard let captureDir = captureDirectory else {
-                self.handleFrameCompletion(frameID: frameID, success: false)
-                return
-            }
-
-            let filename = String(format: "IMG_%04d.dng", frameID)
-            let fileURL = captureDir.appendingPathComponent(filename)
-
-            do {
-                // Check if we have a cached disk version
-                let cacheFile = diskCacheURL!.appendingPathComponent("frame_\(frameID).dng")
-                if FileManager.default.fileExists(atPath: cacheFile.path) {
-                    // Move from cache instead of re-writing
-                    try FileManager.default.moveItem(at: cacheFile, to: fileURL)
-                    print("Moved DNG from cache: \(filename)")
-                } else {
-                    // Write directly from memory
-                    try dngData.write(to: fileURL)
-                    print("Saved DNG from memory: \(filename)")
-                }
-                
-                self.handleFrameCompletion(frameID: frameID, success: true)
-            } catch {
-                print("Error saving DNG file: \(error.localizedDescription)")
-                self.handleFrameCompletion(frameID: frameID, success: false)
-            }
+    private func saveDNGData(_ dngData: Data, frameID: Int) {
+        guard let captureDir = captureDirectory else {
+            self.handleFrameCompletion(frameID: frameID, success: false)
+            return
         }
+
+        let filename = String(format: "IMG_%04d.dng", frameID)
+        let fileURL = captureDir.appendingPathComponent(filename)
+
+        do {
+            // Check if we have a cached disk version
+            let cacheFile = diskCacheURL!.appendingPathComponent(
+                "frame_\(frameID).dng")
+            if FileManager.default.fileExists(atPath: cacheFile.path) {
+                // Move from cache instead of re-writing
+                try FileManager.default.moveItem(at: cacheFile, to: fileURL)
+                print("Moved DNG from cache: \(filename)")
+            } else {
+                // Write directly from memory
+                try dngData.write(to: fileURL)
+                print("Saved DNG from memory: \(filename)")
+            }
+
+            self.handleFrameCompletion(frameID: frameID, success: true)
+        } catch {
+            print("Error saving DNG file: \(error.localizedDescription)")
+            self.handleFrameCompletion(frameID: frameID, success: false)
+        }
+    }
 
     private func saveProcessedData(_ cgImage: CGImage, frameID: Int) {
         guard let captureDir = captureDirectory else {
@@ -1004,10 +1036,10 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?
     ) {
         // NEW: Skip processing during warm-up
-                guard (isCapturing || isFinishing) && !isWarmingUp else {
-                    print("Discarding warm-up frame")
-                    return
-                }
+        guard (isCapturing || isFinishing) && !isWarmingUp else {
+            print("Discarding warm-up frame")
+            return
+        }
 
         pipelineQueue.async {
             let currentFrameID = self.nextFrameID
