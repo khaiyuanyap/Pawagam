@@ -226,8 +226,8 @@ class CameraManager: NSObject, ObservableObject {
     private var currentCropFactor: Double = 1.0
 
     // Increased buffer size
-    private let maxBufferSize = 10000  // Up from 100
-    private let maxMemoryFrames = 5000  // Keep only recent frames in memory
+    private let maxBufferSize = 50000  // Up from 100
+    private let maxMemoryFrames = 10000  // Keep only recent frames in memory
 
     // New buffer management properties
     private var frameDataCache = [Int: Data]()
