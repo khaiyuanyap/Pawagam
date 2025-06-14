@@ -9,6 +9,7 @@ import AVFoundation
 import Combine
 import Photos
 import SwiftUI
+import Accelerate
 
 func print(items: Any..., separator: String = " ", terminator: String = "\n") {
 
@@ -26,7 +27,7 @@ func print(items: Any..., separator: String = " ", terminator: String = "\n") {
     #endif
 }
 
-// MARK: - App Delegate for Orientation Lock
+// App Delegate for Orientation Lock
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.portrait
 
@@ -38,7 +39,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
-// MARK: - Main App
+// Main App
 @main
 struct DNGCameraApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -50,9 +51,9 @@ struct DNGCameraApp: App {
     }
 }
 
-// MARK: - Content View
+/// Content View
 struct ContentView: View {
-    // MARK: - Standard Increments
+    // Standard Increments
     let standardISOs: [Double] = [
         25, 50, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800,
         1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000,
@@ -63,41 +64,79 @@ struct ContentView: View {
         1, 2, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360,
     ]
 
-    // MARK: - Helper Functions
-    private func roundToIncrement(_ value: Double, increments: [Double])
-        -> Double
-    {
+    private func roundToIncrement(_ value: Double, increments: [Double]) -> Double {
         guard !increments.isEmpty else { return value }
         let first = increments[0]
         let last = increments[increments.count - 1]
+        
+        // Handle values outside the increments range
         if value <= first { return first }
         if value >= last { return last }
-
-        // Find the closest increment
-        var closest = increments[0]
-        var minDiff = abs(value - closest)
-        for increment in increments {
-            let diff = abs(value - increment)
-            if diff < minDiff {
-                minDiff = diff
-                closest = increment
+        
+        // Binary search for the first element >= value
+        var low = 0
+        var high = increments.count - 1
+        var index = increments.count // Default if not found (shouldn't happen due to bounds)
+        
+        while low <= high {
+            let mid = (low + high) / 2
+            if increments[mid] < value {
+                low = mid + 1
+            } else {
+                index = mid
+                high = mid - 1
             }
         }
-        return closest
+        
+        // Compare adjacent candidates for the closest increment
+        let candidate1 = increments[index - 1]
+        let candidate2 = increments[index]
+        let diff1 = value - candidate1
+        let diff2 = candidate2 - value
+        
+        return diff1 <= diff2 ? candidate1 : candidate2
     }
 
     @StateObject private var cameraManager = CameraManager()
-    @State private var showStats = false
+    @State private var showSettings = false
     @State private var captureButtonScale: CGFloat = 1.0
+    @State private var showGrid = false
+    @State private var showHistogram = true
 
     var body: some View {
         ZStack {
-            // Camera Preview
-            CameraPreview(
-                session: cameraManager.captureSession,
-                focusAction: cameraManager.setFocusPoint
-            )
-            .ignoresSafeArea()
+            // Glass background
+            Rectangle()
+                .fill(.regularMaterial)
+                .ignoresSafeArea()
+            
+            // Camera Preview with Grid
+            ZStack {
+                CameraPreview(
+                    session: cameraManager.captureSession,
+                    focusAction: cameraManager.setFocusPoint
+                )
+                .ignoresSafeArea()
+                .background(.clear)
+                
+                // Grid Overlay
+                if showGrid {
+                    GridOverlay()
+                }
+            }
+
+            // Histogram
+            if showHistogram {
+                VStack {
+                    HStack {
+                        Spacer()
+                        HistogramView(cameraManager: cameraManager)
+                            .padding(.top, 60)
+                            .padding(.trailing, 20)
+                    }
+                    Spacer()
+                }
+            }
 
             // UI Overlay
             VStack(spacing: 0) {
@@ -109,6 +148,16 @@ struct ContentView: View {
                 // Bottom Controls
                 bottomControls
             }
+        }
+        .fullScreenCover(isPresented: $showSettings) {
+            SettingsView(
+                cameraManager: cameraManager,
+                standardISOs: standardISOs,
+                standardShutterAngles: standardShutterAngles,
+                roundToIncrement: roundToIncrement,
+                showGrid: $showGrid,
+                showHistogram: $showHistogram
+            )
         }
         .alert("Error", isPresented: $cameraManager.showAlert) {
             Button("OK") { cameraManager.acknowledgeError() }
@@ -130,69 +179,47 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Top Status Bar
+    // Top Status Bar
     private var topStatusBar: some View {
-        VStack(spacing: 0) {
-            HStack {
-                // Stats Toggle Button
-                Button(action: {
-                    withAnimation(.smooth(duration: 0.35)) {
-                        showStats.toggle()
-                    }
-                }) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .contentShape(Circle())
-                }
-                .buttonStyle(ModernButtonStyle())
-
-                Spacer()
-
-                // Capture Counter
-                captureCounterView
-
-                Spacer()
-
-                // Focus Lock Indicator (UPDATED)
-                Group {
-                    if cameraManager.isFocusLocked {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.yellow)
-                    } else {
-                        Image(systemName: "lock.open")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                }
-                .frame(width: 44, height: 44)
-                .background(.ultraThinMaterial, in: Circle())
-                .transition(.scale.combined(with: .opacity))
+        HStack {
+            // Settings Toggle Button
+            Button(action: {
+                showSettings = true
+            }) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .contentShape(Circle())
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
+            .buttonStyle(ModernButtonStyle())
 
-            // Expandable Stats Panel
-            if showStats {
-                statsPanel
-                    .transition(
-                        .asymmetric(
-                            insertion: .scale(scale: 0.95, anchor: .top)
-                                .combined(with: .opacity)
-                                .combined(with: .move(edge: .top))
-                                .animation(
-                                    .smooth(duration: 0.4, extraBounce: 0.1)),
-                            removal: .scale(scale: 0.98, anchor: .top)
-                                .combined(with: .opacity)
-                                .combined(with: .move(edge: .top))
-                                .animation(.smooth(duration: 0.25))
-                        )
-                    )
+            Spacer()
+
+            // Capture Counter
+            captureCounterView
+
+            Spacer()
+
+            // Focus Lock Indicator
+            Group {
+                if cameraManager.isFocusLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.yellow)
+                } else {
+                    Image(systemName: "lock.open")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
             }
+            .frame(width: 44, height: 44)
+            .background(.ultraThinMaterial, in: Circle())
+            .transition(.scale.combined(with: .opacity))
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
     }
 
     private var captureCounterView: some View {
@@ -212,191 +239,6 @@ struct ContentView: View {
         )
     }
 
-    private var statsPanel: some View {
-        VStack(spacing: 20) {
-            // Status Grid
-            LazyVGrid(
-                columns: Array(
-                    repeating: GridItem(.flexible(), spacing: 12), count: 2),
-                spacing: 12
-            ) {
-                statusCard(
-                    icon: "gauge.with.dots.needle.67percent",
-                    title: "Frame Rate",
-                    value: "\(cameraManager.targetFPS) fps"
-                )
-
-                statusCard(
-                    icon: "checkmark.circle.fill",
-                    title: "Status",
-                    value: cameraManager.statusText,
-                    valueColor: statusColor
-                )
-
-                statusCard(
-                    icon: "gearshape.2.fill",
-                    title: "Pipeline",
-                    value: cameraManager.pipelineStatus
-                )
-
-                statusCard(
-                    icon: "camera.viewfinder",
-                    title: "Format",
-                    value: cameraManager.pixelFormatName
-                )
-            }
-
-            // Divider
-            Rectangle()
-                .fill(.white.opacity(0.1))
-                .frame(height: 0.5)
-
-            // Exposure Controls Section
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Image(systemName: "camera.metering.multispot")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.7))
-                    Text("Exposure Controls")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-
-                VStack(spacing: 16) {
-                    exposureControl(
-                        icon: "camera.aperture",
-                        title: "ISO",
-                        value: Binding<Double>(
-                            get: { Double(cameraManager.iso) },
-                            set: { cameraManager.iso = Float($0) }
-                        ),
-                        range: Double(
-                            cameraManager.minISO)...Double(cameraManager.maxISO),
-                        increments: standardISOs.filter {
-                            $0 >= Double(cameraManager.minISO)
-                                && $0 <= Double(cameraManager.maxISO)
-                        },
-                        displayValue: "\(Int(cameraManager.iso))"
-                    )
-
-                    // Shutter Angle Control with standard increments
-                    exposureControl(
-                        icon: "timer",
-                        title: "Shutter",
-                        value: $cameraManager.shutterAngle,
-                        range: 1...360,
-                        increments: standardShutterAngles,
-                        displayValue: "\(Int(cameraManager.shutterAngle))°"
-                    )
-                }
-            }
-        }
-        .padding(24)
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 24))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
-        )
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
-        .shadow(color: .black.opacity(0.05), radius: 20, x: 0, y: 10)
-    }
-
-    private func statusCard(
-        icon: String, title: String, value: String, valueColor: Color = .white
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .frame(width: 16, height: 16)
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .textCase(.uppercase)
-                    .tracking(0.5)
-            }
-
-            Text(value)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(valueColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(.white.opacity(0.05), lineWidth: 1)
-        )
-    }
-
-    // MARK: - Updated Exposure Control
-    private func exposureControl(
-        icon: String,
-        title: String,
-        value: Binding<Double>,
-        range: ClosedRange<Double>,
-        increments: [Double],
-        displayValue: String
-    ) -> some View {
-        // Create custom rounded binding
-        let roundedBinding = Binding<Double>(
-            get: { value.wrappedValue },
-            set: { newValue in
-                let rounded = roundToIncrement(newValue, increments: increments)
-                value.wrappedValue = rounded
-            }
-        )
-
-        return VStack(spacing: 12) {
-            HStack {
-                HStack(spacing: 8) {
-                    Image(systemName: icon)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 16)
-
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .textCase(.uppercase)
-                        .tracking(0.3)
-                }
-
-                Spacer()
-
-                Text(displayValue)
-                    .font(
-                        .system(size: 15, weight: .semibold, design: .rounded)
-                    )
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(
-                        Capsule()
-                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
-                    )
-            }
-
-            // Use the rounded binding for the slider
-            Slider(value: roundedBinding, in: range)
-                .tint(.white)
-                .padding(.horizontal, 4)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(.white.opacity(0.05), lineWidth: 1)
-        )
-    }
-
     private var statusColor: Color {
         switch cameraManager.statusText.lowercased() {
         case let status where status.contains("ready"):
@@ -410,7 +252,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Bottom Controls
+    // Bottom Controls
     private var bottomControls: some View {
         VStack(spacing: 20) {
             // Recording Status Indicator
@@ -572,7 +414,479 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Button Styles
+// Grid Overlay
+struct GridOverlay: View {
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                let width = geometry.size.width
+                let height = geometry.size.height
+                
+                // Vertical lines (rule of thirds)
+                let verticalSpacing = width / 3
+                for i in 1..<3 {
+                    let x = verticalSpacing * CGFloat(i)
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: height))
+                }
+                
+                // Horizontal lines (rule of thirds)
+                let horizontalSpacing = height / 3
+                for i in 1..<3 {
+                    let y = horizontalSpacing * CGFloat(i)
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: width, y: y))
+                }
+            }
+            .stroke(.white.opacity(0.3), lineWidth: 0.5)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+struct HistogramView: View {
+    @ObservedObject var cameraManager: CameraManager
+    @State private var histogramData: [CGFloat] = Array(repeating: 0.1, count: 64)
+    
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            // Histogram Chart
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.ultraThinMaterial)
+                    .frame(width: 120, height: 60)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(.white.opacity(0.2), lineWidth: 0.5)
+                    )
+                
+                HStack(alignment: .bottom, spacing: 0) {
+                    ForEach(0..<histogramData.count, id: \.self) { index in
+                        let normalizedHeight = histogramData[index]
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.9),
+                                        .white.opacity(0.6)
+                                    ],
+                                    startPoint: .bottom,
+                                    endPoint: .top
+                                )
+                            )
+                            .frame(
+                                width: 120 / CGFloat(histogramData.count),
+                                height: max(1, normalizedHeight * 50)
+                            )
+                            .animation(.easeInOut(duration: 0.15), value: normalizedHeight)
+                    }
+                }
+                .frame(width: 120, height: 60, alignment: .bottom)
+                .clipped()
+            }
+            
+            // Exposure info
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("ISO \(Int(cameraManager.iso))")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.8))
+                
+                Text("\(Int(cameraManager.shutterAngle))°")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(.white.opacity(0.2), lineWidth: 0.5)
+            )
+        }
+        .onReceive(cameraManager.histogramPublisher) { newData in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                histogramData = newData
+            }
+        }
+    }
+}
+
+// Extension for safe array access
+extension Array {
+    subscript(safe index: Index) -> Element? {
+        return indices.contains(index) ? self[index] : nil
+    }
+}
+
+// Settings View
+struct SettingsView: View {
+    @ObservedObject var cameraManager: CameraManager
+    let standardISOs: [Double]
+    let standardShutterAngles: [Double]
+    let roundToIncrement: (Double, [Double]) -> Double
+    @Binding var showGrid: Bool
+    @Binding var showHistogram: Bool
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Camera Status Section
+                    statusSection
+                    
+                    // Display Options
+                    displaySection
+                    
+                    // Add this new section
+                                     frameRateSection
+                    
+                    // Exposure Controls Section
+                    exposureSection
+                    
+                    // Additional space at bottom
+                    Spacer(minLength: 100)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+            }
+            .background(.thinMaterial, ignoresSafeAreaEdges: .all)
+            .navigationTitle("Camera Settings")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+    
+    private var frameRateSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(icon: "film", title: "Frame Rate")
+            
+            VStack(spacing: 16) {
+                // Frame rate buttons grid
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                    ForEach(cameraManager.desiredFramerates, id: \.self) { fps in
+                        if cameraManager.availableFramerates.contains(fps) {
+                            Button(action: {
+                                cameraManager.setFrameRate(fps)
+                            }) {
+                                Text("\(fps)fps")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(cameraManager.targetFPS == fps ? .black : .white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(
+                                        cameraManager.targetFPS == fps ? Color.white : Color.white.opacity(0.2)
+                                    )
+                                    .cornerRadius(8)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                    )
+                            }
+                        } else {
+                            // Show disabled button for unsupported rates
+                            Text("\(fps)fps")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.white.opacity(0.3))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(Color.gray.opacity(0.2))
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                        }
+                    }
+                }
+                
+                Text("Current: \(cameraManager.targetFPS) fps")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(.white.opacity(0.1), lineWidth: 1)
+            )
+        }
+    }
+    
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(
+                icon: "info.circle.fill",
+                title: "Camera Status"
+            )
+            
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(), spacing: 12), count: 2),
+                spacing: 12
+            ) {
+                // Update this card to show frame rate
+                            statusCard(
+                                icon: "gauge.with.dots.needle.67percent",
+                                title: "Frame Rate",
+                                value: "\(cameraManager.targetFPS) fps"
+                            )
+
+                statusCard(
+                    icon: "checkmark.circle.fill",
+                    title: "Status",
+                    value: cameraManager.statusText,
+                    valueColor: statusColor
+                )
+
+                statusCard(
+                    icon: "gearshape.2.fill",
+                    title: "Pipeline",
+                    value: cameraManager.pipelineStatus
+                )
+
+                statusCard(
+                    icon: "camera.viewfinder",
+                    title: "Format",
+                    value: cameraManager.pixelFormatName
+                )
+            }
+        }
+    }
+    
+    private var displaySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(
+                icon: "display",
+                title: "Display Options"
+            )
+            
+            VStack(spacing: 12) {
+                toggleOption(
+                    icon: "grid",
+                    title: "Grid Overlay",
+                    subtitle: "Rule of thirds composition guide",
+                    isOn: $showGrid
+                )
+                
+                toggleOption(
+                    icon: "chart.bar.fill",
+                    title: "Histogram",
+                    subtitle: "Real-time exposure analysis",
+                    isOn: $showHistogram
+                )
+            }
+        }
+    }
+    
+    private func toggleOption(
+        icon: String,
+        title: String,
+        subtitle: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(width: 24, height: 24)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white)
+                
+                Text(subtitle)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            
+            Spacer()
+            
+            Toggle("", isOn: isOn)
+                .tint(.blue)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+    
+    private var exposureSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            sectionHeader(
+                icon: "camera.metering.multispot",
+                title: "Exposure Controls"
+            )
+            
+            VStack(spacing: 20) {
+                exposureControl(
+                    icon: "camera.aperture",
+                    title: "ISO",
+                    value: Binding<Double>(
+                        get: { Double(cameraManager.iso) },
+                        set: { cameraManager.iso = Float($0) }
+                    ),
+                    range: Double(cameraManager.minISO)...Double(cameraManager.maxISO),
+                    increments: standardISOs.filter {
+                        $0 >= Double(cameraManager.minISO)
+                            && $0 <= Double(cameraManager.maxISO)
+                    },
+                    displayValue: "\(Int(cameraManager.iso))"
+                )
+
+                exposureControl(
+                    icon: "timer",
+                    title: "Shutter Angle",
+                    value: $cameraManager.shutterAngle,
+                    range: 1...360,
+                    increments: standardShutterAngles,
+                    displayValue: "\(Int(cameraManager.shutterAngle))°"
+                )
+            }
+        }
+    }
+    
+    private func sectionHeader(icon: String, title: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+            
+            Text(title)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.white)
+            
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+    }
+    
+    private func statusCard(
+        icon: String,
+        title: String,
+        value: String,
+        valueColor: Color = .white
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 20, height: 20)
+                
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+            }
+
+            Text(value)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(valueColor)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+    
+    private func exposureControl(
+        icon: String,
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        increments: [Double],
+        displayValue: String
+    ) -> some View {
+        let roundedBinding = Binding<Double>(
+            get: { value.wrappedValue },
+            set: { newValue in
+                let rounded = roundToIncrement(newValue, increments)
+                value.wrappedValue = rounded
+            }
+        )
+
+        return VStack(spacing: 16) {
+            HStack {
+                HStack(spacing: 12) {
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(width: 20, height: 20)
+
+                    Text(title)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                }
+
+                Spacer()
+
+                Text(displayValue)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(.white.opacity(0.2), lineWidth: 1)
+                    )
+            }
+
+            Slider(value: roundedBinding, in: range)
+                .tint(.white)
+                .padding(.horizontal, 4)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+    
+    private var statusColor: Color {
+        switch cameraManager.statusText.lowercased() {
+        case let status where status.contains("ready"):
+            return .green
+        case let status where status.contains("error"):
+            return .red
+        case let status where status.contains("warning"):
+            return .orange
+        default:
+            return .white
+        }
+    }
+}
+
+// Button Styles
 struct ModernButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -590,14 +904,14 @@ struct CaptureButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Camera Preview UIViewRepresentable
+// Camera Preview UIViewRepresentable
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     var focusAction: ((CGPoint) -> Void)?
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView(frame: UIScreen.main.bounds)
-        view.backgroundColor = .black
+        view.backgroundColor = .clear
 
         let previewLayer = AVCaptureVideoPreviewLayer(session: session)
         previewLayer.frame = view.frame
@@ -644,12 +958,110 @@ struct CameraPreview: UIViewRepresentable {
         }
     }
 }
+// Camera Manager
+class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    // Add frame rate properties
+        let desiredFramerates = [20, 24, 30, 60, 120]
+        @Published var availableFramerates: [Int] = [20, 24, 30, 60, 120] // Default values
+        
+        // Update to include all desired frame rates
+        private func updateAvailableFrameRates() {
+            guard let device = captureDevice else { return }
+            
+            var rates = Set<Int>()
+            for format in device.formats {
+                for range in format.videoSupportedFrameRateRanges {
+                    let minRate = Int(range.minFrameRate)
+                    let maxRate = Int(range.maxFrameRate)
+                    // Check against our desired frame rates
+                    for rate in desiredFramerates {
+                        if rate >= minRate && rate <= maxRate {
+                            rates.insert(rate)
+                        }
+                    }
+                }
+            }
+            
+            availableFramerates = rates.sorted()
+            print("Available frame rates: \(availableFramerates)")
+        }
+        
+    func setFrameRate(_ fps: Int) {
+        guard availableFramerates.contains(fps) else {
+            print("Frame rate \(fps) not supported")
+            return
+        }
+        
+        // Only reconfigure if frame rate actually changed
+        if fps != targetFPS {
+            targetFPS = fps
+            configureCamera()
+        }
+    }
+    
+    
+    // Add video output properties
+    private var videoOutput: AVCaptureVideoDataOutput!
+    private let videoProcessingQueue = DispatchQueue(label: "com.cinemadngrekorder.videoprocessing")
+    
+    // Histogram publisher
+    @Published var histogramPublisher = PassthroughSubject<[CGFloat], Never>()
 
-// MARK: - Camera Manager
-class CameraManager: NSObject, ObservableObject {
+    // Method to calculate histogram from camera buffer
+    func updateHistogram(from pixelBuffer: CVPixelBuffer) {
+        // Calculate histogram data and publish
+        let histogramData = calculateHistogramData(from: pixelBuffer)
+        histogramPublisher.send(histogramData)
+    }
+
+    // Histogram calculation function
+       private func calculateHistogramData(from pixelBuffer: CVPixelBuffer) -> [CGFloat] {
+           CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+           defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+           
+           guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+               return Array(repeating: 0, count: 64)
+           }
+           
+           let width = CVPixelBufferGetWidth(pixelBuffer)
+           let height = CVPixelBufferGetHeight(pixelBuffer)
+           let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+           
+           var bins = [Int](repeating: 0, count: 64)
+           let totalPixels = width * height
+           let sampleStep = max(1, (totalPixels / 5000)) // Sample every 5000th pixel
+           
+           // Process pixels in batches
+           for y in 0..<height {
+               for x in 0..<width {
+                   guard (y * width + x) % sampleStep == 0 else { continue }
+                   
+                   let offset = y * bytesPerRow + x * 4
+                   let b = Double(baseAddress.load(fromByteOffset: offset, as: UInt8.self))
+                   let g = Double(baseAddress.load(fromByteOffset: offset + 1, as: UInt8.self))
+                   let r = Double(baseAddress.load(fromByteOffset: offset + 2, as: UInt8.self))
+                   
+                   // Calculate luminance (BT.709 formula)
+                   let luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b)
+                   let binIndex = Int(luminance / 4.0) // 256/64=4
+                   
+                   if binIndex >= 0 && binIndex < 64 {
+                       bins[binIndex] += 1
+                   }
+               }
+           }
+           
+           // Normalize bins
+           guard let maxValue = bins.max(), maxValue > 0 else {
+               return Array(repeating: 0, count: 64)
+           }
+           
+           return bins.map { CGFloat($0) / CGFloat(maxValue) }
+       }
+    
     @Published var isFocusLocked = false
 
-    // MARK: - Focus Lock
+    // Focus Lock
     private func lockFocus() {
         guard let device = captureDevice else { return }
 
@@ -789,7 +1201,7 @@ class CameraManager: NSObject, ObservableObject {
         label: "com.cinemadngrekorder.finish")
     private let maxWaitTime: TimeInterval = 10.0
 
-    // MARK: - Published Properties
+    // Published Properties
     @Published var isCapturing = false
     @Published var isFinishing = false
     @Published var captureCount = 0
@@ -801,21 +1213,21 @@ class CameraManager: NSObject, ObservableObject {
     @Published var errorCount = 0
     @Published var pixelFormatName = "Unknown"
 
-    // MARK: - Camera Properties
+    // Camera Properties
     let captureSession = AVCaptureSession()
     private var photoOutput: AVCapturePhotoOutput!
     private var captureDevice: AVCaptureDevice!
 
-    // MARK: - Focus Properties
+    // Focus Properties
     private var focusTimer: Timer?
     private let focusDuration: TimeInterval = 2.0
 
-    // MARK: - Capture Properties
-    let targetFPS = 24
+    // Capture Properties
+    var targetFPS = 24
     private var captureTimer: DispatchSourceTimer?
     private let captureInterval: TimeInterval
 
-    // MARK: - Pipeline System
+    // Pipeline System
     private let pipelineQueue = DispatchQueue(
         label: "com.cinemadngrekorder.pipeline", qos: .userInitiated)
     private let dngProcessingQueue = DispatchQueue(
@@ -829,11 +1241,11 @@ class CameraManager: NSObject, ObservableObject {
     private let pipelineSemaphore: DispatchSemaphore
     private var captureGroup: DispatchGroup?
 
-    // MARK: - Capture Readiness
+    // Capture Readiness
     private let captureSerialQueue = DispatchQueue(
         label: "com.cinemadngrekorder.captureserial")
 
-    // MARK: - File Management
+    // File Management
     private var documentsPath: URL {
         return FileManager.default.urls(
             for: .documentDirectory, in: .userDomainMask
@@ -841,11 +1253,11 @@ class CameraManager: NSObject, ObservableObject {
     }
     var captureDirectory: URL?
 
-    // MARK: - Raw Format Support
+    // Raw Format Support
     private var supportedRawPixelFormats: [OSType] = []
     private var selectedRawPixelFormat: OSType = 0
 
-    // MARK: - Initialization
+    // Initialization
     override init() {
         self.captureInterval = 1.0 / Double(targetFPS)
         self.pipelineSemaphore = DispatchSemaphore(
@@ -889,7 +1301,7 @@ class CameraManager: NSObject, ObservableObject {
             .store(in: &cancellables)
     }
     
-    // MARK: - White Balance Lock
+    // White Balance Lock
     private func lockWhiteBalance() {
         guard let device = captureDevice else { return }
         
@@ -957,8 +1369,19 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Camera Setup
+    // Camera Setup
     private func setupCamera() {
+        // Add video output for histogram
+               videoOutput = AVCaptureVideoDataOutput()
+               videoOutput.setSampleBufferDelegate(self, queue: videoProcessingQueue)
+               videoOutput.videoSettings = [
+                   kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+               ]
+               
+               if captureSession.canAddOutput(videoOutput) {
+                   captureSession.addOutput(videoOutput)
+               }
+        
         captureSession.sessionPreset = .photo
 
         // Setup camera input
@@ -1053,15 +1476,13 @@ class CameraManager: NSObject, ObservableObject {
                 captureDevice.focusMode = .continuousAutoFocus
             }
 
-            // Configure auto exposure
-            if captureDevice.isExposureModeSupported(.continuousAutoExposure) {
-                captureDevice.exposureMode = .continuousAutoExposure
+            // CHANGE EXPOSURE MODE TO LOCKED
+            if captureDevice.isExposureModeSupported(.locked) {
+                captureDevice.exposureMode = .locked  // Disable auto-exposure
             }
 
             // Configure auto white balance
-            if captureDevice.isWhiteBalanceModeSupported(
-                .continuousAutoWhiteBalance)
-            {
+            if captureDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
                 captureDevice.whiteBalanceMode = .continuousAutoWhiteBalance
             }
 
@@ -1083,9 +1504,10 @@ class CameraManager: NSObject, ObservableObject {
             showError(
                 "Camera configuration failed: \(error.localizedDescription)")
         }
+        updateAvailableFrameRates()
     }
 
-    // MARK: - Exposure Control
+    // Exposure Control
     private func setExposure(iso: Float) {
         guard let device = captureDevice else { return }
 
@@ -1126,7 +1548,6 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Focus Control (enhanced)
     func setFocusPoint(_ point: CGPoint) {
         // Add this guard condition to ignore focus changes during capture
         guard !isCapturing else { return }
@@ -1155,20 +1576,6 @@ class CameraManager: NSObject, ObservableObject {
                     device.focusMode = .continuousAutoFocus
                 }
             }
-
-            // Set exposure point if supported
-            if device.isExposurePointOfInterestSupported {
-                device.exposurePointOfInterest = point
-
-                if device.isExposureModeSupported(.autoExpose) {
-                    device.exposureMode = .autoExpose
-                } else if device.isExposureModeSupported(
-                    .continuousAutoExposure)
-                {
-                    device.exposureMode = .continuousAutoExposure
-                }
-            }
-
             device.unlockForConfiguration()
 
             // Reset focus to continuous after delay
@@ -1207,7 +1614,7 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Permissions
+    // Permissions
     func requestPermissions() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             DispatchQueue.main.async {
@@ -1225,7 +1632,7 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Capture Control
+    // Capture Control
     func startCapture() {
         // Reset metrics
         elapsedTime = 0
@@ -1308,7 +1715,7 @@ class CameraManager: NSObject, ObservableObject {
           lockWhiteBalance() // ADD THIS LINE
     }
 
-    // MARK: - Stop Capture Logic
+    // Stop Capture Logic
     func stopCapture() {
         guard isCapturing else { return }
 
@@ -1413,7 +1820,7 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Pipeline Processing
+    // Pipeline Processing
     private func processFrame(_ photo: AVCapturePhoto, frameID: Int) {
         pipelineQueue.async {
             // Track frame in buffer
@@ -1513,8 +1920,24 @@ class CameraManager: NSObject, ObservableObject {
             self.handleFrameCompletion(frameID: frameID, success: false)
         }
     }
+    
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        // Calculate histogram
+        let histogramData = calculateHistogramData(from: pixelBuffer)
+        
+        // Publish on main thread
+        DispatchQueue.main.async {
+            self.histogramPublisher.send(histogramData)
+        }
+    }
 
-    // MARK: - Buffer Enhancements
+    // Buffer Enhancements
     private func saveDNGData(_ dngData: Data, frameID: Int) {
         guard let captureDir = captureDirectory else {
             self.handleFrameCompletion(frameID: frameID, success: false)
@@ -1602,7 +2025,7 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Thread-Safe UI Updates
+    // Thread-Safe UI Updates
     private func updateStatusText(_ text: String) {
         DispatchQueue.main.async {
             self.statusText = text
@@ -1630,7 +2053,7 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Error Handling
+    // Error Handling
     func acknowledgeError() {
         showAlert = false
     }
@@ -1643,7 +2066,8 @@ class CameraManager: NSObject, ObservableObject {
     }
 }
 
-// MARK: - AVCapturePhotoCaptureDelegate
+
+// AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(
         _ output: AVCapturePhotoOutput,
@@ -1675,7 +2099,8 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
     }
 }
 
-// MARK: - Preview
+
+// Preview
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
