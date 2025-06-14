@@ -6,14 +6,34 @@
 //
 
 import AVFoundation
+import Combine
 import Photos
 import SwiftUI
+
+func print(items: Any..., separator: String = " ", terminator: String = "\n") {
+
+    #if DEBUG
+
+    var idx = items.startIndex
+    let endIdx = items.endIndex
+
+    repeat {
+        Swift.print(items[idx], separator: separator, terminator: idx == (endIdx - 1) ? terminator : separator)
+        idx += 1
+    }
+    while idx < endIdx
+
+    #endif
+}
 
 // MARK: - App Delegate for Orientation Lock
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.portrait
-    
-    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
         return AppDelegate.orientationLock
     }
 }
@@ -22,16 +42,53 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct DNGCameraApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
     }
 }
+
 // MARK: - Content View
 struct ContentView: View {
+    // MARK: - Standard Increments
+    let standardISOs: [Double] = [
+        25, 50, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800,
+        1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000,
+        10000, 12800, 16000, 20000, 25600, 32000, 40000, 51200,
+    ]
+
+    let standardShutterAngles: [Double] = [
+        1, 2, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360,
+    ]
+
+    // MARK: - Helper Functions
+    private func roundToIncrement(_ value: Double, increments: [Double])
+        -> Double
+    {
+        guard !increments.isEmpty else { return value }
+        let first = increments[0]
+        let last = increments[increments.count - 1]
+        if value <= first { return first }
+        if value >= last { return last }
+
+        // Find the closest increment
+        var closest = increments[0]
+        var minDiff = abs(value - closest)
+        for increment in increments {
+            let diff = abs(value - increment)
+            if diff < minDiff {
+                minDiff = diff
+                closest = increment
+            }
+        }
+        return closest
+    }
+
     @StateObject private var cameraManager = CameraManager()
+    @State private var showStats = false
+    @State private var captureButtonScale: CGFloat = 1.0
 
     var body: some View {
         ZStack {
@@ -43,99 +100,14 @@ struct ContentView: View {
             .ignoresSafeArea()
 
             // UI Overlay
-            VStack {
+            VStack(spacing: 0) {
                 // Top Status Bar
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Target: \(cameraManager.targetFPS) FPS")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                        Text("Status: \(cameraManager.statusText)")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                        Text("Pipeline: \(cameraManager.pipelineStatus)")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                        Text("Format: \(cameraManager.pixelFormatName)")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                    }
-
-                    Spacer()
-
-                    Text("Captured: \(cameraManager.captureCount)")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(8)
-                }
-                .padding()
-                .background(
-                    LinearGradient(
-                        colors: [.black.opacity(0.4), .clear], startPoint: .top,
-                        endPoint: .bottom))
+                topStatusBar
 
                 Spacer()
 
                 // Bottom Controls
-                VStack(spacing: 16) {
-                    // Capture Button
-                    Button(action: {
-                        if cameraManager.isCapturing {
-                            cameraManager.stopCapture()
-                        } else if !cameraManager.isFinishing {
-                            cameraManager.startCapture()
-                        }
-                    }) {
-                        ZStack {
-                            Circle()
-                                .fill(
-                                    cameraManager.isFinishing
-                                        ? Color.gray
-                                        : (cameraManager.isCapturing
-                                            ? Color.green : Color.red)
-                                )
-                                .frame(width: 80, height: 80)
-
-                            Circle()
-                                .stroke(Color.white, lineWidth: 4)
-                                .frame(width: 80, height: 80)
-
-                            Image(
-                                systemName:
-                                    cameraManager.isFinishing
-                                    ? "hourglass"
-                                    : (cameraManager.isCapturing
-                                        ? "stop.fill" : "camera.fill")
-                            )
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundColor(.white)
-                        }
-                    }
-                    .scaleEffect(cameraManager.isCapturing ? 1.1 : 1.0)
-                    .animation(
-                        .easeInOut(duration: 0.1),
-                        value: cameraManager.isCapturing
-                    )
-                    .disabled(cameraManager.isFinishing)
-
-                    // Status Text
-                    Text(
-                        cameraManager.isFinishing
-                            ? "Finishing..."
-                            : (cameraManager.isCapturing
-                                ? "Recording..." : "Tap to Start")
-                    )
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(12)
-                }
-                .padding(.bottom, 40)
+                bottomControls
             }
         }
         .alert("Error", isPresented: $cameraManager.showAlert) {
@@ -146,15 +118,475 @@ struct ContentView: View {
         .alert(
             "Capture Complete", isPresented: $cameraManager.showCaptureComplete
         ) {
+            Button("View Files") {
+                cameraManager.openFilesApp()
+            }
             Button("OK") {}
         } message: {
-            Text(
-                "Saved \(cameraManager.captureCount) files to 'On My iPhone' in Files app.\n\nPath: DNG Camera > DNG_Captures > \(cameraManager.captureDirectory?.lastPathComponent ?? "")\n\nErrors: \(cameraManager.errorCount)"
-            )
+            Text(captureCompleteMessage)
         }
         .onAppear {
             cameraManager.requestPermissions()
         }
+    }
+
+    // MARK: - Top Status Bar
+    private var topStatusBar: some View {
+        VStack(spacing: 0) {
+            HStack {
+                // Stats Toggle Button
+                Button(action: {
+                    withAnimation(.smooth(duration: 0.35)) {
+                        showStats.toggle()
+                    }
+                }) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(ModernButtonStyle())
+
+                Spacer()
+
+                // Capture Counter
+                captureCounterView
+
+                Spacer()
+
+                // Focus Lock Indicator (UPDATED)
+                Group {
+                    if cameraManager.isFocusLocked {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.yellow)
+                    } else {
+                        Image(systemName: "lock.open")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .background(.ultraThinMaterial, in: Circle())
+                .transition(.scale.combined(with: .opacity))
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+
+            // Expandable Stats Panel
+            if showStats {
+                statsPanel
+                    .transition(
+                        .asymmetric(
+                            insertion: .scale(scale: 0.95, anchor: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .move(edge: .top))
+                                .animation(
+                                    .smooth(duration: 0.4, extraBounce: 0.1)),
+                            removal: .scale(scale: 0.98, anchor: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .move(edge: .top))
+                                .animation(.smooth(duration: 0.25))
+                        )
+                    )
+            }
+        }
+    }
+
+    private var captureCounterView: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 14, weight: .medium))
+            Text("\(cameraManager.captureCount)")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(.white.opacity(0.15), lineWidth: 0.5)
+        )
+    }
+
+    private var statsPanel: some View {
+        VStack(spacing: 20) {
+            // Status Grid
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(), spacing: 12), count: 2),
+                spacing: 12
+            ) {
+                statusCard(
+                    icon: "gauge.with.dots.needle.67percent",
+                    title: "Frame Rate",
+                    value: "\(cameraManager.targetFPS) fps"
+                )
+
+                statusCard(
+                    icon: "checkmark.circle.fill",
+                    title: "Status",
+                    value: cameraManager.statusText,
+                    valueColor: statusColor
+                )
+
+                statusCard(
+                    icon: "gearshape.2.fill",
+                    title: "Pipeline",
+                    value: cameraManager.pipelineStatus
+                )
+
+                statusCard(
+                    icon: "camera.viewfinder",
+                    title: "Format",
+                    value: cameraManager.pixelFormatName
+                )
+            }
+
+            // Divider
+            Rectangle()
+                .fill(.white.opacity(0.1))
+                .frame(height: 0.5)
+
+            // Exposure Controls Section
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "camera.metering.multispot")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text("Exposure Controls")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                VStack(spacing: 16) {
+                    exposureControl(
+                        icon: "camera.aperture",
+                        title: "ISO",
+                        value: Binding<Double>(
+                            get: { Double(cameraManager.iso) },
+                            set: { cameraManager.iso = Float($0) }
+                        ),
+                        range: Double(
+                            cameraManager.minISO)...Double(cameraManager.maxISO),
+                        increments: standardISOs.filter {
+                            $0 >= Double(cameraManager.minISO)
+                                && $0 <= Double(cameraManager.maxISO)
+                        },
+                        displayValue: "\(Int(cameraManager.iso))"
+                    )
+
+                    // Shutter Angle Control with standard increments
+                    exposureControl(
+                        icon: "timer",
+                        title: "Shutter",
+                        value: $cameraManager.shutterAngle,
+                        range: 1...360,
+                        increments: standardShutterAngles,
+                        displayValue: "\(Int(cameraManager.shutterAngle))°"
+                    )
+                }
+            }
+        }
+        .padding(24)
+        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 24))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.top, 20)
+        .shadow(color: .black.opacity(0.05), radius: 20, x: 0, y: 10)
+    }
+
+    private func statusCard(
+        icon: String, title: String, value: String, valueColor: Color = .white
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 16, height: 16)
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+            }
+
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(valueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(.white.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Updated Exposure Control
+    private func exposureControl(
+        icon: String,
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        increments: [Double],
+        displayValue: String
+    ) -> some View {
+        // Create custom rounded binding
+        let roundedBinding = Binding<Double>(
+            get: { value.wrappedValue },
+            set: { newValue in
+                let rounded = roundToIncrement(newValue, increments: increments)
+                value.wrappedValue = rounded
+            }
+        )
+
+        return VStack(spacing: 12) {
+            HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 16)
+
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .textCase(.uppercase)
+                        .tracking(0.3)
+                }
+
+                Spacer()
+
+                Text(displayValue)
+                    .font(
+                        .system(size: 15, weight: .semibold, design: .rounded)
+                    )
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                    )
+            }
+
+            // Use the rounded binding for the slider
+            Slider(value: roundedBinding, in: range)
+                .tint(.white)
+                .padding(.horizontal, 4)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(.white.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    private var statusColor: Color {
+        switch cameraManager.statusText.lowercased() {
+        case let status where status.contains("ready"):
+            return .green
+        case let status where status.contains("error"):
+            return .red
+        case let status where status.contains("warning"):
+            return .orange
+        default:
+            return .white
+        }
+    }
+
+    // MARK: - Bottom Controls
+    private var bottomControls: some View {
+        VStack(spacing: 20) {
+            // Recording Status Indicator
+            if cameraManager.isCapturing || cameraManager.isFinishing {
+                recordingIndicator
+                    .transition(
+                        .scale.combined(with: .opacity).animation(
+                            .smooth(duration: 0.3)))
+            }
+
+            // Main Capture Button
+            captureButton
+
+            // Status Text
+            statusText
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 40)
+    }
+
+    private var recordingIndicator: some View {
+        HStack(spacing: 10) {
+            // Pulsing indicator
+            Circle()
+                .fill(.red)
+                .frame(width: 8, height: 8)
+                .scaleEffect(cameraManager.isCapturing ? 1.2 : 0.8)
+                .opacity(cameraManager.isCapturing ? 1.0 : 0.6)
+                .animation(
+                    .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
+                    value: cameraManager.isCapturing
+                )
+
+            Text(cameraManager.isFinishing ? "Finalizing..." : "Recording")
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(.red.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+
+    private var captureButton: some View {
+        Button(action: captureButtonAction) {
+            ZStack {
+                // Outer ring
+                Circle()
+                    .stroke(.white.opacity(0.2), lineWidth: 2)
+                    .frame(width: 80, height: 80)
+
+                // Inner button
+                Circle()
+                    .fill(.regularMaterial)
+                    .frame(width: 64, height: 64)
+                    .overlay(
+                        Circle()
+                            .fill(buttonAccentColor.opacity(0.1))
+                            .frame(width: 64, height: 64)
+                    )
+                    .overlay(
+                        Circle()
+                            .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                            .frame(width: 64, height: 64)
+                    )
+
+                // Icon
+                Image(systemName: buttonIcon)
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(buttonIconColor)
+                    .scaleEffect(cameraManager.isCapturing ? 0.9 : 1.0)
+                    .animation(
+                        .smooth(duration: 0.2), value: cameraManager.isCapturing
+                    )
+            }
+        }
+        .scaleEffect(captureButtonScale)
+        .disabled(cameraManager.isFinishing)
+        .opacity(cameraManager.isFinishing ? 0.6 : 1.0)
+        .buttonStyle(CaptureButtonStyle())
+        .sensoryFeedback(.impact(weight: .medium), trigger: captureButtonScale)
+        { _, newValue in
+            newValue < 1.0
+        }
+    }
+
+    private var buttonAccentColor: Color {
+        if cameraManager.isFinishing {
+            return .gray
+        } else if cameraManager.isCapturing {
+            return .red
+        } else {
+            return .white
+        }
+    }
+
+    private var buttonIconColor: Color {
+        if cameraManager.isFinishing {
+            return .gray
+        } else if cameraManager.isCapturing {
+            return .red
+        } else {
+            return .white
+        }
+    }
+
+    private var buttonIcon: String {
+        if cameraManager.isFinishing {
+            return "hourglass"
+        } else if cameraManager.isCapturing {
+            return "stop.fill"
+        } else {
+            return "camera.fill"
+        }
+    }
+
+    private var statusText: some View {
+        Text(statusTextValue)
+            .font(.system(size: 16, weight: .medium, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(.white.opacity(0.15), lineWidth: 0.5)
+            )
+    }
+
+    private var statusTextValue: String {
+        if cameraManager.isFinishing {
+            return "Finishing..."
+        } else if cameraManager.isCapturing {
+            return "Recording..."
+        } else {
+            return "Tap to Record"
+        }
+    }
+
+    private var captureCompleteMessage: String {
+        """
+        Successfully saved \(cameraManager.captureCount) files!
+
+        📁 Location: Files > On My iPhone > DNG Camera > DNG_Captures > \(cameraManager.captureDirectory?.lastPathComponent ?? "")
+
+        \(cameraManager.errorCount > 0 ? "⚠️ \(cameraManager.errorCount) errors occurred" : "✅ No errors")
+        """
+    }
+
+    private func captureButtonAction() {
+        if cameraManager.isCapturing {
+            cameraManager.stopCapture()
+        } else if !cameraManager.isFinishing {
+            cameraManager.startCapture()
+        }
+    }
+}
+
+// MARK: - Button Styles
+struct ModernButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
+            .animation(.smooth(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+struct CaptureButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+            .animation(.smooth(duration: 0.1), value: configuration.isPressed)
     }
 }
 
@@ -215,6 +647,112 @@ struct CameraPreview: UIViewRepresentable {
 
 // MARK: - Camera Manager
 class CameraManager: NSObject, ObservableObject {
+    @Published var isFocusLocked = false
+
+    // MARK: - Focus Lock
+    private func lockFocus() {
+        guard let device = captureDevice else { return }
+
+        do {
+            try device.lockForConfiguration()
+
+            // Lock focus at current setting
+            if device.isFocusModeSupported(.locked) {
+                device.focusMode = .locked
+                DispatchQueue.main.async {
+                    self.isFocusLocked = true
+                }
+                print("Focus locked")
+            } else {
+                print("Locked focus mode not supported")
+            }
+
+            device.unlockForConfiguration()
+        } catch {
+            print("Error locking focus: \(error.localizedDescription)")
+        }
+    }
+
+    private func unlockFocus() {
+        guard let device = captureDevice else { return }
+
+        do {
+            try device.lockForConfiguration()
+
+            if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+                DispatchQueue.main.async {
+                    self.isFocusLocked = false
+                }
+                print("Focus unlocked")
+            }
+
+            device.unlockForConfiguration()
+        } catch {
+            print("Error unlocking focus: \(error.localizedDescription)")
+        }
+    }
+
+    private func resetFocus() {
+        guard let device = captureDevice else { return }
+
+        do {
+            try device.lockForConfiguration()
+
+            if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+                DispatchQueue.main.async {
+                    self.isFocusLocked = false
+                }
+                print("Focus reset to continuous")
+            }
+
+            device.unlockForConfiguration()
+        } catch {
+            print("Error resetting focus: \(error.localizedDescription)")
+        }
+    }
+
+    // Exposure properties
+    @Published var iso: Float = 100.0
+    @Published var shutterAngle: Double = 180.0
+    @Published var minISO: Float = 0.0
+    @Published var maxISO: Float = 0.0
+    private var cancellables = Set<AnyCancellable>()
+
+    // Add focus point visualization
+    @Published var focusPoint: CGPoint? = nil
+    private var focusPointTimer: Timer?
+
+    // File management
+    func openFilesApp() {
+        guard let captureDir = captureDirectory else {
+            showError("No capture directory found")
+            return
+        }
+
+        // Create a URL that points to the parent directory
+        let parentDir = captureDir.deletingLastPathComponent()
+
+        DispatchQueue.main.async {
+            // Open the Files app at our directory
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: parentDir.path) {
+                let controller = UIDocumentPickerViewController(
+                    forOpeningContentTypes: [.folder])
+                controller.directoryURL = parentDir
+                UIApplication.shared.windows.first?.rootViewController?.present(
+                    controller, animated: true)
+            } else {
+                self.showError("Directory not found")
+            }
+        }
+    }
+
+    @Published var elapsedTime: TimeInterval = 0
+
+    private var metricsTimer: Timer?
+    private var captureStartTime: Date?
     // Increased buffer size
     private let maxBufferSize = 50000  // Up from 100
     private let maxMemoryFrames = 10000  // Keep only recent frames in memory
@@ -250,9 +788,6 @@ class CameraManager: NSObject, ObservableObject {
     private let finishQueue = DispatchQueue(
         label: "com.cinemadngrekorder.finish")
     private let maxWaitTime: TimeInterval = 10.0
-    
-    @Published var isWarmingUp = false // NEW: Track warm-up state
-    private var warmUpTimer: Timer?    // NEW: Timer for warm-up period
 
     // MARK: - Published Properties
     @Published var isCapturing = false
@@ -328,10 +863,65 @@ class CameraManager: NSObject, ObservableObject {
             name: UIApplication.didReceiveMemoryWarningNotification,
             object: nil
         )
+
+        // Setup exposure observers
+        setupExposureObservers()
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        focusPointTimer?.invalidate()
+    }
+
+    private func setupExposureObservers() {
+        $iso
+            .dropFirst()
+            .sink { [weak self] newISO in
+                self?.setExposure(iso: newISO)
+            }
+            .store(in: &cancellables)
+
+        $shutterAngle
+            .dropFirst()
+            .sink { [weak self] newAngle in
+                self?.setShutterAngle(newAngle)
+            }
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - White Balance Lock
+    private func lockWhiteBalance() {
+        guard let device = captureDevice else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            // Lock white balance at current setting
+            if device.isWhiteBalanceModeSupported(.locked) {
+                device.whiteBalanceMode = .locked
+                print("White balance locked")
+            } else {
+                print("Locked white balance mode not supported")
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("Error locking white balance: \(error.localizedDescription)")
+        }
+    }
+
+    private func unlockWhiteBalance() {
+        guard let device = captureDevice else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            // Revert to continuous auto white balance
+            if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                device.whiteBalanceMode = .continuousAutoWhiteBalance
+                print("White balance unlocked")
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("Error unlocking white balance: \(error.localizedDescription)")
+        }
     }
 
     @objc private func handleMemoryWarning() {
@@ -381,6 +971,17 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         captureDevice = camera
+
+        do {
+            // Get ISO range
+            try captureDevice.lockForConfiguration()
+            minISO = captureDevice.activeFormat.minISO
+            maxISO = captureDevice.activeFormat.maxISO
+            iso = captureDevice.iso
+            captureDevice.unlockForConfiguration()
+        } catch {
+            print("Error getting ISO range: \(error)")
+        }
 
         do {
             let input = try AVCaptureDeviceInput(device: camera)
@@ -484,27 +1085,88 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Focus Control
-    func setFocusPoint(_ point: CGPoint) {
+    // MARK: - Exposure Control
+    private func setExposure(iso: Float) {
         guard let device = captureDevice else { return }
 
         do {
             try device.lockForConfiguration()
 
+            // Set ISO
+            device.setExposureModeCustom(
+                duration: device.exposureDuration, iso: iso)
+
+            device.unlockForConfiguration()
+        } catch {
+            print("Error setting ISO: \(error.localizedDescription)")
+        }
+    }
+
+    private func setShutterAngle(_ angle: Double) {
+        guard let device = captureDevice else { return }
+
+        do {
+            try device.lockForConfiguration()
+
+            // Calculate exposure duration from shutter angle
+            let frameDuration = CMTime(
+                value: 1, timescale: CMTimeScale(targetFPS))
+            let exposureDurationSeconds =
+                (angle / 360.0) * Double(frameDuration.seconds)
+            let exposureDuration = CMTime(
+                seconds: exposureDurationSeconds, preferredTimescale: 1_000_000)
+
+            // Set exposure duration
+            device.setExposureModeCustom(
+                duration: exposureDuration, iso: device.iso)
+
+            device.unlockForConfiguration()
+        } catch {
+            print("Error setting shutter angle: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Focus Control (enhanced)
+    func setFocusPoint(_ point: CGPoint) {
+        // Add this guard condition to ignore focus changes during capture
+        guard !isCapturing else { return }
+        
+        guard let device = captureDevice else { return }
+
+        // Visualize focus point
+        focusPoint = point
+        focusPointTimer?.invalidate()
+        focusPointTimer = Timer.scheduledTimer(
+            withTimeInterval: 2.0, repeats: false
+        ) { [weak self] _ in
+            self?.focusPoint = nil
+        }
+
+        do {
+            try device.lockForConfiguration()
+
             // Check if point of interest is supported
-            if device.isFocusPointOfInterestSupported
-                && device.isFocusModeSupported(.autoFocus)
-            {
+            if device.isFocusPointOfInterestSupported {
                 device.focusPointOfInterest = point
-                device.focusMode = .autoFocus
+
+                if device.isFocusModeSupported(.autoFocus) {
+                    device.focusMode = .autoFocus
+                } else if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
             }
 
             // Set exposure point if supported
-            if device.isExposurePointOfInterestSupported
-                && device.isExposureModeSupported(.autoExpose)
-            {
+            if device.isExposurePointOfInterestSupported {
                 device.exposurePointOfInterest = point
-                device.exposureMode = .autoExpose
+
+                if device.isExposureModeSupported(.autoExpose) {
+                    device.exposureMode = .autoExpose
+                } else if device.isExposureModeSupported(
+                    .continuousAutoExposure)
+                {
+                    device.exposureMode = .continuousAutoExposure
+                }
             }
 
             device.unlockForConfiguration()
@@ -549,7 +1211,10 @@ class CameraManager: NSObject, ObservableObject {
     func requestPermissions() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             DispatchQueue.main.async {
-                if !granted {
+                if granted {
+                    // Reset focus when permissions are granted
+                    self?.resetFocus()
+                } else {
                     self?.showError("Camera access is required for this app")
                 }
             }
@@ -562,6 +1227,22 @@ class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Capture Control
     func startCapture() {
+        // Reset metrics
+        elapsedTime = 0
+
+        // Start metrics timer
+        captureStartTime = Date()
+        metricsTimer = Timer.scheduledTimer(
+            withTimeInterval: 1.0, repeats: true
+        ) { [weak self] _ in
+            guard let self = self else { return }
+
+            // Update elapsed time
+            if let startTime = self.captureStartTime {
+                self.elapsedTime = Date().timeIntervalSince(startTime)
+            }
+        }
+
         pendingFrames.removeAll()
 
         // Create capture directory in Documents (visible in "On My iPhone")
@@ -600,69 +1281,36 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         // Reset pipeline state
-                isWarmingUp = true // NEW: Start in warm-up mode
-                isCapturing = false
-                isFinishing = false
-                captureCount = 0
-                errorCount = 0
-                nextFrameID = 1
-                lastSavedFrameID = 0
-                frameBuffer.removeAll()
-                captureGroup = DispatchGroup()
-                updateStatusText("Warming Up...") // NEW: Update status
-                updatePipelineStatus()
+        isCapturing = true
+        isFinishing = false
+        captureCount = 0
+        errorCount = 0
+        nextFrameID = 1
+        lastSavedFrameID = 0
+        frameBuffer.removeAll()
+        captureGroup = DispatchGroup()
+        updateStatusText("Capturing...")
+        updatePipelineStatus()
 
-                // Start high-speed capture timer
-                let timer = DispatchSource.makeTimerSource(
-                    queue: DispatchQueue(label: "com.cinemadngrekorder.capturetimer"))
-                timer.schedule(
-                    deadline: .now(), repeating: captureInterval,
-                    leeway: .milliseconds(1))
-                timer.setEventHandler { [weak self] in
-                    self?.capturePhoto()
-                }
-                timer.resume()
-                captureTimer = timer
+        // Start high-speed capture timer
+        let timer = DispatchSource.makeTimerSource(
+            queue: DispatchQueue(label: "com.cinemadngrekorder.capturetimer"))
+        timer.schedule(
+            deadline: .now(), repeating: captureInterval,
+            leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.capturePhoto()
+        }
+        timer.resume()
+        captureTimer = timer
 
-                // NEW: Set warm-up timer to transition after 5 seconds
-                DispatchQueue.main.async {
-                    self.warmUpTimer = Timer.scheduledTimer(
-                        withTimeInterval: 10.0,
-                        repeats: false
-                    ) { [weak self] _ in
-                        guard let self = self else { return }
-                        self.isWarmingUp = false
-                        self.isCapturing = true
-                        self.updateStatusText("Capturing...")
-                        print("Warm-up complete. Starting actual capture.")
-                    }
-                }
+        lockFocus()
+          lockWhiteBalance() // ADD THIS LINE
     }
 
     // MARK: - Stop Capture Logic
     func stopCapture() {
-        guard isCapturing || isWarmingUp else { return }
-
-        // Cancel warm-up if active
-        warmUpTimer?.invalidate()
-        warmUpTimer = nil
-        
-        if isWarmingUp {
-                    // Delete warm-up directory if capture was stopped during warm-up
-                    if let captureDir = captureDirectory {
-                        do {
-                            try FileManager.default.removeItem(at: captureDir)
-                            print("Deleted warm-up directory: \(captureDir.path)")
-                        } catch {
-                            print("Error deleting warm-up directory: \(error)")
-                        }
-                    }
-                    
-                    isWarmingUp = false
-                    updateStatusText("Ready")
-                    return
-                }
-
+        guard isCapturing else { return }
 
         isCapturing = false
         isFinishing = true
@@ -705,28 +1353,27 @@ class CameraManager: NSObject, ObservableObject {
                 self.updateStatusText("Ready")
                 self.showCaptureComplete = true
             }
+
+            unlockFocus()
+             unlockWhiteBalance() // ADD THIS LINE
+
         }
-        
-        warmUpTimer?.invalidate() // NEW: Cancel warm-up if stopping
-               warmUpTimer = nil
     }
 
     private func capturePhoto() {
-        // NEW: Skip buffer check during warm-up
-                if isCapturing {  // Only check buffer during actual capture
-                    bufferLock.lock()
-                    let currentBufferSize = frameBuffer.count
-                    bufferLock.unlock()
+        // Skip if buffer full
+        bufferLock.lock()
+        let currentBufferSize = frameBuffer.count
+        bufferLock.unlock()
 
-                    if currentBufferSize >= maxBufferSize {
-                        print("Skipping capture: buffer full (\(currentBufferSize)/\(maxBufferSize))")
-                        return
-                    }
-                }
-
+        if currentBufferSize >= maxBufferSize {
+            print(
+                "Skipping capture: buffer full (\(currentBufferSize)/\(maxBufferSize))"
+            )
+            return
+        }
 
         captureSerialQueue.async {
-
             // Check buffer size
             self.bufferLock.lock()
             let currentBufferSize = self.frameBuffer.count
@@ -868,34 +1515,35 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     // MARK: - Buffer Enhancements
-        private func saveDNGData(_ dngData: Data, frameID: Int) {
-            guard let captureDir = captureDirectory else {
-                self.handleFrameCompletion(frameID: frameID, success: false)
-                return
-            }
-
-            let filename = String(format: "IMG_%04d.dng", frameID)
-            let fileURL = captureDir.appendingPathComponent(filename)
-
-            do {
-                // Check if we have a cached disk version
-                let cacheFile = diskCacheURL!.appendingPathComponent("frame_\(frameID).dng")
-                if FileManager.default.fileExists(atPath: cacheFile.path) {
-                    // Move from cache instead of re-writing
-                    try FileManager.default.moveItem(at: cacheFile, to: fileURL)
-                    print("Moved DNG from cache: \(filename)")
-                } else {
-                    // Write directly from memory
-                    try dngData.write(to: fileURL)
-                    print("Saved DNG from memory: \(filename)")
-                }
-                
-                self.handleFrameCompletion(frameID: frameID, success: true)
-            } catch {
-                print("Error saving DNG file: \(error.localizedDescription)")
-                self.handleFrameCompletion(frameID: frameID, success: false)
-            }
+    private func saveDNGData(_ dngData: Data, frameID: Int) {
+        guard let captureDir = captureDirectory else {
+            self.handleFrameCompletion(frameID: frameID, success: false)
+            return
         }
+
+        let filename = String(format: "IMG_%04d.dng", frameID)
+        let fileURL = captureDir.appendingPathComponent(filename)
+
+        do {
+            // Check if we have a cached disk version
+            let cacheFile = diskCacheURL!.appendingPathComponent(
+                "frame_\(frameID).dng")
+            if FileManager.default.fileExists(atPath: cacheFile.path) {
+                // Move from cache instead of re-writing
+                try FileManager.default.moveItem(at: cacheFile, to: fileURL)
+                print("Moved DNG from cache: \(filename)")
+            } else {
+                // Write directly from memory
+                try dngData.write(to: fileURL)
+                print("Saved DNG from memory: \(filename)")
+            }
+
+            self.handleFrameCompletion(frameID: frameID, success: true)
+        } catch {
+            print("Error saving DNG file: \(error.localizedDescription)")
+            self.handleFrameCompletion(frameID: frameID, success: false)
+        }
+    }
 
     private func saveProcessedData(_ cgImage: CGImage, frameID: Int) {
         guard let captureDir = captureDirectory else {
@@ -997,18 +1645,10 @@ class CameraManager: NSObject, ObservableObject {
 
 // MARK: - AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
-    // Max time to wait for pending frames
-    // MARK: - AVCapturePhotoCaptureDelegate
     func photoOutput(
         _ output: AVCapturePhotoOutput,
         didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?
     ) {
-        // NEW: Skip processing during warm-up
-                guard (isCapturing || isFinishing) && !isWarmingUp else {
-                    print("Discarding warm-up frame")
-                    return
-                }
-
         pipelineQueue.async {
             let currentFrameID = self.nextFrameID
             self.nextFrameID += 1
