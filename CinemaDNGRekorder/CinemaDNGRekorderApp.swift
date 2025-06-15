@@ -10,11 +10,11 @@ import Accelerate
 import Combine
 import Photos
 import SwiftUI
-
-import SwiftUI
+import UniformTypeIdentifiers
+import MobileCoreServices
 
 // Global variable to control printing
-var isPrintingEnabled = true
+var isPrintingEnabled = false
 
 // Override the standard print function
 func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
@@ -47,6 +47,36 @@ struct DNGCameraApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+        }
+    }
+}
+
+// MARK: - URL Bookmark Extension
+extension URL {
+    func bookmarkData() -> Data? {
+        do {
+            return try self.bookmarkData(
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } catch {
+            print("Error creating bookmark: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
+    static func fromBookmarkData(_ data: Data) -> URL? {
+        var isStale = false
+        do {
+            let url = try URL(
+                resolvingBookmarkData: data,
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            return isStale ? nil : url
+        } catch {
+            print("Error resolving bookmark: \(error.localizedDescription)")
+            return nil
         }
     }
 }
@@ -179,10 +209,9 @@ struct ContentView: View {
         .onAppear {
             cameraManager.requestPermissions()
             // Lock exposure when view appears
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            cameraManager.lockExposure()
-                        }
-
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                cameraManager.lockExposure()
+            }
         }
     }
 
@@ -555,6 +584,42 @@ extension Array {
     }
 }
 
+// MARK: - Directory Picker
+struct DirectoryPicker: UIViewControllerRepresentable {
+    @Binding var selectedURL: URL?
+    @Environment(\.dismiss) var dismiss
+    
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let controller = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.folder])
+        controller.delegate = context.coordinator
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        var parent: DirectoryPicker
+        
+        init(_ parent: DirectoryPicker) {
+            self.parent = parent
+        }
+        
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            parent.selectedURL = url
+            parent.dismiss()
+        }
+        
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            parent.dismiss()
+        }
+    }
+}
+
 // Settings View
 struct SettingsView: View {
     @ObservedObject var cameraManager: CameraManager
@@ -565,6 +630,8 @@ struct SettingsView: View {
     @Binding var showHistogram: Bool
 
     @Environment(\.dismiss) private var dismiss
+    @State private var showDirectoryPicker = false
+    @State private var selectedDirectoryURL: URL?
 
     var body: some View {
         NavigationView {
@@ -572,11 +639,14 @@ struct SettingsView: View {
                 VStack(spacing: 24) {
                     // Camera Status Section
                     statusSection
+                    
+                    // Directory Selection
+                    directorySelectionSection
 
                     // Display Options
                     displaySection
 
-                    // Add this new section
+                    // Frame Rate Section
                     frameRateSection
 
                     // Exposure Controls Section
@@ -602,6 +672,52 @@ struct SettingsView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .fullScreenCover(isPresented: $showDirectoryPicker) {
+            DirectoryPicker(selectedURL: $selectedDirectoryURL)
+                .onDisappear {
+                    if let url = selectedDirectoryURL {
+                        cameraManager.setCaptureDirectory(url)
+                    }
+                }
+        }
+    }
+    
+    private var directorySelectionSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(icon: "folder", title: "Capture Directory")
+            
+            VStack(spacing: 12) {
+                HStack {
+                    // Use the published property directly
+                                       Text(cameraManager.captureDirectoryURL?.lastPathComponent ?? "Default")
+                                           .font(.system(size: 16, weight: .medium))
+                                           .foregroundStyle(.white.opacity(0.8))
+                                           .lineLimit(1)
+                                           .truncationMode(.middle)
+                    
+                    Spacer()
+                    
+                    Button("Change") {
+                        showDirectoryPicker = true
+                    }
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.blue)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(.white.opacity(0.1), lineWidth: 1)
+                )
+                
+                Text("Current: \(cameraManager.captureDirectoryURL?.path ?? "")")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+            }
+        }
     }
 
     private var frameRateSection: some View {
@@ -1012,10 +1128,20 @@ struct CameraPreview: UIViewRepresentable {
         }
     }
 }
+
 // Camera Manager
 class CameraManager: NSObject, ObservableObject,
     AVCaptureVideoDataOutputSampleBufferDelegate
 {
+    // Directory bookmark properties
+    private let directoryBookmarkKey = "captureDirectoryBookmark"
+    private var directoryBookmarkData: Data? {
+        get { UserDefaults.standard.data(forKey: directoryBookmarkKey) }
+        set { UserDefaults.standard.set(newValue, forKey: directoryBookmarkKey) }
+    }
+    
+    @Published var captureDirectoryURL: URL?
+
     // Add frame rate properties
     let desiredFramerates = [20, 24, 30, 60, 120]
     @Published var availableFramerates: [Int] = [20, 24, 30, 60, 120]  // Default values
@@ -1322,6 +1448,24 @@ class CameraManager: NSObject, ObservableObject,
         ).first!
     }
     var captureDirectory: URL?
+    
+    private func loadCaptureDirectory() {
+            if let data = UserDefaults.standard.data(forKey: directoryBookmarkKey),
+               let url = URL.fromBookmarkData(data) {
+                captureDirectoryURL = url
+            } else {
+                captureDirectoryURL = documentsPath.appendingPathComponent("DNG_Captures")
+            }
+        }
+        
+        func setCaptureDirectory(_ url: URL) {
+            if let data = url.bookmarkData() {
+                UserDefaults.standard.set(data, forKey: directoryBookmarkKey)
+                captureDirectoryURL = url
+                print("Saved directory bookmark: \(url.path)")
+            }
+        }
+        
 
     // Raw Format Support
     private var supportedRawPixelFormats: [OSType] = []
@@ -1333,6 +1477,7 @@ class CameraManager: NSObject, ObservableObject,
         self.pipelineSemaphore = DispatchSemaphore(
             value: ProcessInfo.processInfo.processorCount)
         super.init()
+        loadCaptureDirectory()
         setupCamera()
 
         // Setup disk cache
@@ -1735,26 +1880,26 @@ class CameraManager: NSObject, ObservableObject,
 
         pendingFrames.removeAll()
 
-        // Create capture directory in Documents (visible in "On My iPhone")
+        // Use selected directory instead of hard-coded path
+        let baseDirectory = captureDirectoryURL ?? documentsPath.appendingPathComponent("DNG_Captures")
+        
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let timestamp = formatter.string(from: Date())
-
-        // Create a folder specifically for DNG captures
-        let dngCapturesFolder = documentsPath.appendingPathComponent(
-            "DNG_Captures")
-        captureDirectory = dngCapturesFolder.appendingPathComponent(
-            "Capture_\(timestamp)")
+        captureDirectory = baseDirectory.appendingPathComponent("Capture_\(timestamp)")
 
         guard var captureDir = captureDirectory else { return }
 
         do {
-            // Create the main DNG_Captures folder if it doesn't exist
+            // Create the directories
             try FileManager.default.createDirectory(
-                at: dngCapturesFolder, withIntermediateDirectories: true)
-            // Create the specific capture session folder
+                at: baseDirectory,
+                withIntermediateDirectories: true
+            )
             try FileManager.default.createDirectory(
-                at: captureDir, withIntermediateDirectories: true)
+                at: captureDir,
+                withIntermediateDirectories: true
+            )
 
             // Make sure the files are visible in Files app
             var resourceValues = URLResourceValues()
