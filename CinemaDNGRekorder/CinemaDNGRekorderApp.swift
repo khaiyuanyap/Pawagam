@@ -13,6 +13,47 @@ import SwiftUI
 import UniformTypeIdentifiers
 import MobileCoreServices
 
+// MARK: - User Preferences Keys
+struct UserPreferences {
+    static let showGridKey = "showGrid"
+    static let showHistogramKey = "showHistogram"
+    static let targetFPSKey = "targetFPS"
+    static let isoKey = "iso"
+    static let shutterAngleKey = "shutterAngle"
+    static let directoryBookmarkKey = "captureDirectoryBookmark"
+}
+
+// MARK: - UserDefaults Extension
+extension UserDefaults {
+    func bool(forKey key: String, defaultValue: Bool) -> Bool {
+        if let value = self.value(forKey: key) as? Bool {
+            return value
+        }
+        return defaultValue
+    }
+    
+    func integer(forKey key: String, defaultValue: Int) -> Int {
+        if let value = self.value(forKey: key) as? Int {
+            return value
+        }
+        return defaultValue
+    }
+    
+    func float(forKey key: String, defaultValue: Float) -> Float {
+        if let value = self.value(forKey: key) as? Float {
+            return value
+        }
+        return defaultValue
+    }
+    
+    func double(forKey key: String, defaultValue: Double) -> Double {
+        if let value = self.value(forKey: key) as? Double {
+            return value
+        }
+        return defaultValue
+    }
+}
+
 // Global variable to control printing
 var isPrintingEnabled = false
 
@@ -132,8 +173,6 @@ struct ContentView: View {
     @StateObject private var cameraManager = CameraManager()
     @State private var showSettings = false
     @State private var captureButtonScale: CGFloat = 1.0
-    @State private var showGrid = false
-    @State private var showHistogram = true
 
     var body: some View {
         ZStack {
@@ -152,13 +191,13 @@ struct ContentView: View {
                 .background(.clear)
 
                 // Grid Overlay
-                if showGrid {
+                if cameraManager.showGrid {
                     GridOverlay()
                 }
             }
 
             // Histogram
-            if showHistogram {
+            if cameraManager.showHistogram {
                 VStack {
                     HStack {
                         Spacer()
@@ -180,15 +219,18 @@ struct ContentView: View {
                 // Bottom Controls
                 bottomControls
             }
+            
+            // Modern Capture Complete Popup
+            if cameraManager.showCaptureComplete {
+                modernCaptureCompletePopup
+            }
         }
         .fullScreenCover(isPresented: $showSettings) {
             SettingsView(
                 cameraManager: cameraManager,
                 standardISOs: standardISOs,
                 standardShutterAngles: standardShutterAngles,
-                roundToIncrement: roundToIncrement,
-                showGrid: $showGrid,
-                showHistogram: $showHistogram
+                roundToIncrement: roundToIncrement
             )
         }
         .alert("Error", isPresented: $cameraManager.showAlert) {
@@ -196,22 +238,162 @@ struct ContentView: View {
         } message: {
             Text(cameraManager.alertMessage)
         }
-        .alert(
-            "Capture Complete", isPresented: $cameraManager.showCaptureComplete
-        ) {
-            Button("View Files") {
-                cameraManager.openFilesApp()
-            }
-            Button("OK") {}
-        } message: {
-            Text(captureCompleteMessage)
-        }
         .onAppear {
             cameraManager.requestPermissions()
             // Lock exposure when view appears
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 cameraManager.lockExposure()
             }
+        }
+    }
+
+    private var modernCaptureCompletePopup: some View {
+        ZStack {
+            // Darker backdrop blur
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        cameraManager.showCaptureComplete = false
+                    }
+                }
+            
+            // Main popup card
+            VStack(spacing: 0) {
+                // Header section with icon and title
+                HStack(spacing: 12) {
+                    // Success icon with monochromatic styling
+                    ZStack {
+                        Circle()
+                            .fill(.gray.opacity(0.3))
+                            .frame(width: 32, height: 32)
+                        
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                    }
+                    .scaleEffect(cameraManager.showCaptureComplete ? 1.0 : 0.8)
+                    .animation(.spring(response: 0.6, dampingFraction: 0.8), value: cameraManager.showCaptureComplete)
+                    
+                    Text("Capture Complete")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                    
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+                
+                // Content section
+                VStack(spacing: 12) {
+                    // Frames count with monochromatic styling
+                    HStack(spacing: 10) {
+                        Image(systemName: "photo.stack")
+                            .font(.system(size: 16))
+                            .foregroundColor(.secondary)
+                            .frame(width: 16)
+                        
+                        Text("\(cameraManager.captureCount) cDNG frames saved")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        
+                        Spacer()
+                    }
+                    
+                    // Location info
+                    if let directory = cameraManager.captureDirectory?.lastPathComponent {
+                        HStack(spacing: 10) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 16))
+                                .foregroundColor(.secondary)
+                                .frame(width: 16)
+                            
+                            Text(directory)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            
+                            Spacer()
+                        }
+                    }
+                    
+                    // Error status
+                    HStack(spacing: 10) {
+                        Image(systemName: cameraManager.errorCount > 0 ? "exclamationmark.triangle" : "checkmark")
+                            .font(.system(size: 16))
+                            .foregroundColor(cameraManager.errorCount > 0 ? .primary : .secondary)
+                            .frame(width: 16)
+                        
+                        Text(cameraManager.errorCount > 0 ? "\(cameraManager.errorCount) dropped frames" : "No errors")
+                            .font(.subheadline)
+                            .foregroundColor(cameraManager.errorCount > 0 ? .primary : .secondary)
+                        
+                        Spacer()
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                
+                // Action buttons
+                HStack(spacing: 16) {
+                    // Secondary action button
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            cameraManager.showCaptureComplete = false
+                        }
+                    }) {
+                        Text("Done")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                            )
+                    }
+                    
+                    // Primary action button
+                    Button(action: {
+                        cameraManager.openFilesApp()
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            cameraManager.showCaptureComplete = false
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 14))
+                            Text("View Files")
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white)
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+            .frame(maxWidth: 320)
+            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(.quaternary, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 6)
+            .scaleEffect(cameraManager.showCaptureComplete ? 1.0 : 0.9)
+            .opacity(cameraManager.showCaptureComplete ? 1.0 : 0)
+            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: cameraManager.showCaptureComplete)
         }
     }
 
@@ -431,16 +613,6 @@ struct ContentView: View {
         }
     }
 
-    private var captureCompleteMessage: String {
-        """
-        Successfully saved \(cameraManager.captureCount) files!
-
-        📁 Location: Files > On My iPhone > DNG Camera > DNG_Captures > \(cameraManager.captureDirectory?.lastPathComponent ?? "")
-
-        \(cameraManager.errorCount > 0 ? "⚠️ \(cameraManager.errorCount) errors occurred" : "✅ No errors")
-        """
-    }
-
     private func captureButtonAction() {
         if cameraManager.isCapturing {
             cameraManager.stopCapture()
@@ -626,8 +798,6 @@ struct SettingsView: View {
     let standardISOs: [Double]
     let standardShutterAngles: [Double]
     let roundToIncrement: (Double, [Double]) -> Double
-    @Binding var showGrid: Bool
-    @Binding var showHistogram: Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var showDirectoryPicker = false
@@ -847,14 +1017,14 @@ struct SettingsView: View {
                     icon: "grid",
                     title: "Grid Overlay",
                     subtitle: "Rule of thirds composition guide",
-                    isOn: $showGrid
+                    isOn: $cameraManager.showGrid
                 )
 
                 toggleOption(
                     icon: "chart.bar.fill",
                     title: "Histogram",
                     subtitle: "Real-time exposure analysis",
-                    isOn: $showHistogram
+                    isOn: $cameraManager.showHistogram
                 )
             }
         }
@@ -1133,14 +1303,47 @@ struct CameraPreview: UIViewRepresentable {
 class CameraManager: NSObject, ObservableObject,
     AVCaptureVideoDataOutputSampleBufferDelegate
 {
-    // Directory bookmark properties
-    private let directoryBookmarkKey = "captureDirectoryBookmark"
-    private var directoryBookmarkData: Data? {
-        get { UserDefaults.standard.data(forKey: directoryBookmarkKey) }
-        set { UserDefaults.standard.set(newValue, forKey: directoryBookmarkKey) }
+    // MARK: - User Preferences Properties
+    @Published var showGrid: Bool = false {
+        didSet { savePreferences() }
     }
     
-    @Published var captureDirectoryURL: URL?
+    @Published var showHistogram: Bool = true {
+        didSet { savePreferences() }
+    }
+    
+    @Published var targetFPS: Int = 24 {
+        didSet {
+            if oldValue != targetFPS {
+                setFrameRate(targetFPS)
+                savePreferences()
+            }
+        }
+    }
+    
+    @Published var iso: Float = 100.0 {
+        didSet {
+            if oldValue != iso {
+                setExposure(iso: iso)
+                savePreferences()
+            }
+        }
+    }
+    
+    @Published var shutterAngle: Double = 180.0 {
+        didSet {
+            if oldValue != shutterAngle {
+                setShutterAngle(shutterAngle)
+                savePreferences()
+            }
+        }
+    }
+    
+    // Directory bookmark properties
+    private let directoryBookmarkKey = UserPreferences.directoryBookmarkKey
+    @Published var captureDirectoryURL: URL? {
+        didSet { savePreferences() }
+    }
 
     // Add frame rate properties
     let desiredFramerates = [20, 24, 30, 60, 120]
@@ -1321,9 +1524,11 @@ class CameraManager: NSObject, ObservableObject,
         }
     }
 
+    // Raw Format Support
+      private var supportedRawPixelFormats: [OSType] = []
+      private var selectedRawPixelFormat: OSType = 0
+    
     // Exposure properties
-    @Published var iso: Float = 100.0
-    @Published var shutterAngle: Double = 180.0
     @Published var minISO: Float = 0.0
     @Published var maxISO: Float = 0.0
     private var cancellables = Set<AnyCancellable>()
@@ -1419,9 +1624,7 @@ class CameraManager: NSObject, ObservableObject,
     private let focusDuration: TimeInterval = 2.0
 
     // Capture Properties
-    var targetFPS = 24
     private var captureTimer: DispatchSourceTimer?
-    private let captureInterval: TimeInterval
 
     // Pipeline System
     private let pipelineQueue = DispatchQueue(
@@ -1449,52 +1652,78 @@ class CameraManager: NSObject, ObservableObject,
     }
     var captureDirectory: URL?
     
-    private func loadCaptureDirectory() {
-            if let data = UserDefaults.standard.data(forKey: directoryBookmarkKey),
-               let url = URL.fromBookmarkData(data) {
-                captureDirectoryURL = url
-            } else {
-                captureDirectoryURL = documentsPath.appendingPathComponent("DNG_Captures")
-            }
-        }
+    // MARK: - Preferences Management
+    private func loadPreferences() {
+        let defaults = UserDefaults.standard
         
-        func setCaptureDirectory(_ url: URL) {
-            if let data = url.bookmarkData() {
-                UserDefaults.standard.set(data, forKey: directoryBookmarkKey)
-                captureDirectoryURL = url
-                print("Saved directory bookmark: \(url.path)")
-            }
-        }
+        showGrid = defaults.bool(forKey: UserPreferences.showGridKey, defaultValue: false)
+        showHistogram = defaults.bool(forKey: UserPreferences.showHistogramKey, defaultValue: true)
+        targetFPS = defaults.integer(forKey: UserPreferences.targetFPSKey, defaultValue: 24)
+        iso = defaults.float(forKey: UserPreferences.isoKey, defaultValue: 100.0)
+        shutterAngle = defaults.double(forKey: UserPreferences.shutterAngleKey, defaultValue: 180.0)
         
-
-    // Raw Format Support
-    private var supportedRawPixelFormats: [OSType] = []
-    private var selectedRawPixelFormat: OSType = 0
-
-    // Initialization
-    override init() {
-        self.captureInterval = 1.0 / Double(targetFPS)
-        self.pipelineSemaphore = DispatchSemaphore(
-            value: ProcessInfo.processInfo.processorCount)
-        super.init()
-        loadCaptureDirectory()
-        setupCamera()
-
-        // Setup disk cache
-        setupDiskCache()
-
-        // Memory warning observer
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleMemoryWarning),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil
-        )
-
-        // Setup exposure observers
-        setupExposureObservers()
+        // Directory loading
+        if let data = defaults.data(forKey: UserPreferences.directoryBookmarkKey),
+           let url = URL.fromBookmarkData(data) {
+            captureDirectoryURL = url
+        } else {
+            captureDirectoryURL = documentsPath.appendingPathComponent("DNG_Captures")
+        }
     }
+    
+    private func savePreferences() {
+        let defaults = UserDefaults.standard
+        
+        defaults.set(showGrid, forKey: UserPreferences.showGridKey)
+        defaults.set(showHistogram, forKey: UserPreferences.showHistogramKey)
+        defaults.set(targetFPS, forKey: UserPreferences.targetFPSKey)
+        defaults.set(iso, forKey: UserPreferences.isoKey)
+        defaults.set(shutterAngle, forKey: UserPreferences.shutterAngleKey)
+        
+        if let url = captureDirectoryURL, let bookmark = url.bookmarkData() {
+            defaults.set(bookmark, forKey: UserPreferences.directoryBookmarkKey)
+        }
+    }
+    
+    private func loadCaptureDirectory() {
+        // This is now handled in loadPreferences()
+    }
+        
+    func setCaptureDirectory(_ url: URL) {
+        captureDirectoryURL = url
+    }
+    
+    // Make captureInterval computed rather than stored
+       private var captureInterval: TimeInterval {
+           1.0 / Double(targetFPS)
+       }
 
+       // Initialization
+       override init() {
+           // Initialize semaphore first
+           self.pipelineSemaphore = DispatchSemaphore(
+               value: ProcessInfo.processInfo.processorCount)
+           
+           super.init()
+           
+           // Load preferences BEFORE setting up camera
+           loadPreferences()
+           setupCamera()
+
+           // Setup disk cache
+           setupDiskCache()
+
+           // Memory warning observer
+           NotificationCenter.default.addObserver(
+               self,
+               selector: #selector(handleMemoryWarning),
+               name: UIApplication.didReceiveMemoryWarningNotification,
+               object: nil
+           )
+
+           // Setup exposure observers
+           setupExposureObservers()
+       }
     deinit {
         NotificationCenter.default.removeObserver(self)
         focusPointTimer?.invalidate()
@@ -1640,6 +1869,7 @@ class CameraManager: NSObject, ObservableObject,
         if captureSession.canAddOutput(photoOutput) {
             captureSession.addOutput(photoOutput)
         }
+        
 
         // Get supported raw formats
         supportedRawPixelFormats = photoOutput.availableRawPhotoPixelFormatTypes
