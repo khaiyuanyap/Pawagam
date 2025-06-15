@@ -6,25 +6,25 @@
 //
 
 import AVFoundation
+import Accelerate
 import Combine
 import Photos
 import SwiftUI
-import Accelerate
 
-func print(items: Any..., separator: String = " ", terminator: String = "\n") {
+import SwiftUI
 
-    #if DEBUG
+// Global variable to control printing
+var isPrintingEnabled = true
 
-    var idx = items.startIndex
-    let endIdx = items.endIndex
-
-    repeat {
-        Swift.print(items[idx], separator: separator, terminator: idx == (endIdx - 1) ? terminator : separator)
-        idx += 1
-    }
-    while idx < endIdx
-
-    #endif
+// Override the standard print function
+func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+    guard isPrintingEnabled else { return }
+    
+    // Reconstruct the output string
+    let output = items.map { "\($0)" }.joined(separator: separator)
+    
+    // Call the original print function from Swift standard library
+    Swift.print(output, terminator: terminator)
 }
 
 // App Delegate for Orientation Lock
@@ -64,20 +64,22 @@ struct ContentView: View {
         1, 2, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360,
     ]
 
-    private func roundToIncrement(_ value: Double, increments: [Double]) -> Double {
+    private func roundToIncrement(_ value: Double, increments: [Double])
+        -> Double
+    {
         guard !increments.isEmpty else { return value }
         let first = increments[0]
         let last = increments[increments.count - 1]
-        
+
         // Handle values outside the increments range
         if value <= first { return first }
         if value >= last { return last }
-        
+
         // Binary search for the first element >= value
         var low = 0
         var high = increments.count - 1
-        var index = increments.count // Default if not found (shouldn't happen due to bounds)
-        
+        var index = increments.count  // Default if not found (shouldn't happen due to bounds)
+
         while low <= high {
             let mid = (low + high) / 2
             if increments[mid] < value {
@@ -87,13 +89,13 @@ struct ContentView: View {
                 high = mid - 1
             }
         }
-        
+
         // Compare adjacent candidates for the closest increment
         let candidate1 = increments[index - 1]
         let candidate2 = increments[index]
         let diff1 = value - candidate1
         let diff2 = candidate2 - value
-        
+
         return diff1 <= diff2 ? candidate1 : candidate2
     }
 
@@ -109,7 +111,7 @@ struct ContentView: View {
             Rectangle()
                 .fill(.regularMaterial)
                 .ignoresSafeArea()
-            
+
             // Camera Preview with Grid
             ZStack {
                 CameraPreview(
@@ -118,7 +120,7 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
                 .background(.clear)
-                
+
                 // Grid Overlay
                 if showGrid {
                     GridOverlay()
@@ -176,6 +178,11 @@ struct ContentView: View {
         }
         .onAppear {
             cameraManager.requestPermissions()
+            // Lock exposure when view appears
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            cameraManager.lockExposure()
+                        }
+
         }
     }
 
@@ -421,7 +428,7 @@ struct GridOverlay: View {
             Path { path in
                 let width = geometry.size.width
                 let height = geometry.size.height
-                
+
                 // Vertical lines (rule of thirds)
                 let verticalSpacing = width / 3
                 for i in 1..<3 {
@@ -429,7 +436,7 @@ struct GridOverlay: View {
                     path.move(to: CGPoint(x: x, y: 0))
                     path.addLine(to: CGPoint(x: x, y: height))
                 }
-                
+
                 // Horizontal lines (rule of thirds)
                 let horizontalSpacing = height / 3
                 for i in 1..<3 {
@@ -444,10 +451,32 @@ struct GridOverlay: View {
     }
 }
 
+// In CameraManager, add this method to lock exposure
+extension CameraManager {
+    func lockExposure() {
+        guard let device = captureDevice else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            
+            // Lock exposure at current values
+            if device.isExposureModeSupported(.locked) {
+                device.exposureMode = .locked
+                print("Exposure locked")
+            }
+            
+            device.unlockForConfiguration()
+        } catch {
+            print("Error locking exposure: \(error.localizedDescription)")
+        }
+    }
+}
+
 struct HistogramView: View {
     @ObservedObject var cameraManager: CameraManager
-    @State private var histogramData: [CGFloat] = Array(repeating: 0.1, count: 64)
-    
+    @State private var histogramData: [CGFloat] = Array(
+        repeating: 0.1, count: 64)
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
             // Histogram Chart
@@ -459,7 +488,7 @@ struct HistogramView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(.white.opacity(0.2), lineWidth: 0.5)
                     )
-                
+
                 HStack(alignment: .bottom, spacing: 0) {
                     ForEach(0..<histogramData.count, id: \.self) { index in
                         let normalizedHeight = histogramData[index]
@@ -468,7 +497,7 @@ struct HistogramView: View {
                                 LinearGradient(
                                     colors: [
                                         .white.opacity(0.9),
-                                        .white.opacity(0.6)
+                                        .white.opacity(0.6),
                                     ],
                                     startPoint: .bottom,
                                     endPoint: .top
@@ -478,26 +507,34 @@ struct HistogramView: View {
                                 width: 120 / CGFloat(histogramData.count),
                                 height: max(1, normalizedHeight * 50)
                             )
-                            .animation(.easeInOut(duration: 0.15), value: normalizedHeight)
+                            .animation(
+                                .easeInOut(duration: 0.15),
+                                value: normalizedHeight)
                     }
                 }
                 .frame(width: 120, height: 60, alignment: .bottom)
                 .clipped()
             }
-            
+
             // Exposure info
             VStack(alignment: .trailing, spacing: 2) {
                 Text("ISO \(Int(cameraManager.iso))")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(
+                        .system(size: 10, weight: .medium, design: .monospaced)
+                    )
                     .foregroundStyle(.white.opacity(0.8))
-                
+
                 Text("\(Int(cameraManager.shutterAngle))°")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(
+                        .system(size: 10, weight: .medium, design: .monospaced)
+                    )
                     .foregroundStyle(.white.opacity(0.8))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+            .background(
+                .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(.white.opacity(0.2), lineWidth: 0.5)
@@ -526,25 +563,25 @@ struct SettingsView: View {
     let roundToIncrement: (Double, [Double]) -> Double
     @Binding var showGrid: Bool
     @Binding var showHistogram: Bool
-    
+
     @Environment(\.dismiss) private var dismiss
-    
+
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
                     // Camera Status Section
                     statusSection
-                    
+
                     // Display Options
                     displaySection
-                    
+
                     // Add this new section
-                                     frameRateSection
-                    
+                    frameRateSection
+
                     // Exposure Controls Section
                     exposureSection
-                    
+
                     // Additional space at bottom
                     Spacer(minLength: 100)
                 }
@@ -566,31 +603,43 @@ struct SettingsView: View {
         }
         .preferredColorScheme(.dark)
     }
-    
+
     private var frameRateSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader(icon: "film", title: "Frame Rate")
-            
+
             VStack(spacing: 16) {
                 // Frame rate buttons grid
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-                    ForEach(cameraManager.desiredFramerates, id: \.self) { fps in
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.flexible(), spacing: 10), count: 3),
+                    spacing: 10
+                ) {
+                    ForEach(cameraManager.desiredFramerates, id: \.self) {
+                        fps in
                         if cameraManager.availableFramerates.contains(fps) {
                             Button(action: {
                                 cameraManager.setFrameRate(fps)
                             }) {
                                 Text("\(fps)fps")
                                     .font(.system(size: 16, weight: .medium))
-                                    .foregroundColor(cameraManager.targetFPS == fps ? .black : .white)
+                                    .foregroundColor(
+                                        cameraManager.targetFPS == fps
+                                            ? .black : .white
+                                    )
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 10)
                                     .background(
-                                        cameraManager.targetFPS == fps ? Color.white : Color.white.opacity(0.2)
+                                        cameraManager.targetFPS == fps
+                                            ? Color.white
+                                            : Color.white.opacity(0.2)
                                     )
                                     .cornerRadius(8)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 8)
-                                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                            .stroke(
+                                                Color.white.opacity(0.3),
+                                                lineWidth: 1)
                                     )
                             }
                         } else {
@@ -604,12 +653,14 @@ struct SettingsView: View {
                                 .cornerRadius(8)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        .stroke(
+                                            Color.white.opacity(0.1),
+                                            lineWidth: 1)
                                 )
                         }
                     }
                 }
-                
+
                 Text("Current: \(cameraManager.targetFPS) fps")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.white.opacity(0.8))
@@ -617,32 +668,34 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .background(
+                .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 20)
                     .stroke(.white.opacity(0.1), lineWidth: 1)
             )
         }
     }
-    
+
     private var statusSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader(
                 icon: "info.circle.fill",
                 title: "Camera Status"
             )
-            
+
             LazyVGrid(
                 columns: Array(
                     repeating: GridItem(.flexible(), spacing: 12), count: 2),
                 spacing: 12
             ) {
                 // Update this card to show frame rate
-                            statusCard(
-                                icon: "gauge.with.dots.needle.67percent",
-                                title: "Frame Rate",
-                                value: "\(cameraManager.targetFPS) fps"
-                            )
+                statusCard(
+                    icon: "gauge.with.dots.needle.67percent",
+                    title: "Frame Rate",
+                    value: "\(cameraManager.targetFPS) fps"
+                )
 
                 statusCard(
                     icon: "checkmark.circle.fill",
@@ -665,14 +718,14 @@ struct SettingsView: View {
             }
         }
     }
-    
+
     private var displaySection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader(
                 icon: "display",
                 title: "Display Options"
             )
-            
+
             VStack(spacing: 12) {
                 toggleOption(
                     icon: "grid",
@@ -680,7 +733,7 @@ struct SettingsView: View {
                     subtitle: "Rule of thirds composition guide",
                     isOn: $showGrid
                 )
-                
+
                 toggleOption(
                     icon: "chart.bar.fill",
                     title: "Histogram",
@@ -690,7 +743,7 @@ struct SettingsView: View {
             }
         }
     }
-    
+
     private func toggleOption(
         icon: String,
         title: String,
@@ -702,19 +755,19 @@ struct SettingsView: View {
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.white.opacity(0.8))
                 .frame(width: 24, height: 24)
-            
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white)
-                
+
                 Text(subtitle)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(.white.opacity(0.6))
             }
-            
+
             Spacer()
-            
+
             Toggle("", isOn: isOn)
                 .tint(.blue)
         }
@@ -726,14 +779,14 @@ struct SettingsView: View {
                 .stroke(.white.opacity(0.1), lineWidth: 1)
         )
     }
-    
+
     private var exposureSection: some View {
         VStack(alignment: .leading, spacing: 20) {
             sectionHeader(
                 icon: "camera.metering.multispot",
                 title: "Exposure Controls"
             )
-            
+
             VStack(spacing: 20) {
                 exposureControl(
                     icon: "camera.aperture",
@@ -742,7 +795,8 @@ struct SettingsView: View {
                         get: { Double(cameraManager.iso) },
                         set: { cameraManager.iso = Float($0) }
                     ),
-                    range: Double(cameraManager.minISO)...Double(cameraManager.maxISO),
+                    range: Double(
+                        cameraManager.minISO)...Double(cameraManager.maxISO),
                     increments: standardISOs.filter {
                         $0 >= Double(cameraManager.minISO)
                             && $0 <= Double(cameraManager.maxISO)
@@ -761,23 +815,23 @@ struct SettingsView: View {
             }
         }
     }
-    
+
     private func sectionHeader(icon: String, title: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(.white)
                 .frame(width: 24, height: 24)
-            
+
             Text(title)
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.white)
-            
+
             Spacer()
         }
         .padding(.horizontal, 4)
     }
-    
+
     private func statusCard(
         icon: String,
         title: String,
@@ -790,7 +844,7 @@ struct SettingsView: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white.opacity(0.7))
                     .frame(width: 20, height: 20)
-                
+
                 Text(title)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.white.opacity(0.7))
@@ -813,7 +867,7 @@ struct SettingsView: View {
                 .stroke(.white.opacity(0.1), lineWidth: 1)
         )
     }
-    
+
     private func exposureControl(
         icon: String,
         title: String,
@@ -871,7 +925,7 @@ struct SettingsView: View {
                 .stroke(.white.opacity(0.1), lineWidth: 1)
         )
     }
-    
+
     private var statusColor: Color {
         switch cameraManager.statusText.lowercased() {
         case let status where status.contains("ready"):
@@ -907,25 +961,25 @@ struct CaptureButtonStyle: ButtonStyle {
 // Camera Preview UIViewRepresentable
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    var focusAction: ((CGPoint) -> Void)?
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: UIScreen.main.bounds)
-        view.backgroundColor = .clear
-
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.frame = view.frame
-        previewLayer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(previewLayer)
-
-        // Add tap gesture for focus
-        let tapGesture = UITapGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleTap(_:)))
-        view.addGestureRecognizer(tapGesture)
-
-        return view
-    }
+        var focusAction: ((CGPoint) -> Void)?
+        
+        func makeUIView(context: Context) -> UIView {
+            let view = UIView(frame: UIScreen.main.bounds)
+            view.backgroundColor = .clear
+            
+            let previewLayer = AVCaptureVideoPreviewLayer(session: session)
+            previewLayer.frame = view.frame
+            previewLayer.videoGravity = .resizeAspectFill
+            view.layer.addSublayer(previewLayer)
+            
+            // Add tap gesture for focus
+            let tapGesture = UITapGestureRecognizer(
+                target: context.coordinator,
+                action: #selector(Coordinator.handleTap(_:)))
+            view.addGestureRecognizer(tapGesture)
+            
+            return view
+        }
 
     func updateUIView(_ uiView: UIView, context: Context) {
         if let layer = uiView.layer.sublayers?.first
@@ -959,51 +1013,53 @@ struct CameraPreview: UIViewRepresentable {
     }
 }
 // Camera Manager
-class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+class CameraManager: NSObject, ObservableObject,
+    AVCaptureVideoDataOutputSampleBufferDelegate
+{
     // Add frame rate properties
-        let desiredFramerates = [20, 24, 30, 60, 120]
-        @Published var availableFramerates: [Int] = [20, 24, 30, 60, 120] // Default values
-        
-        // Update to include all desired frame rates
-        private func updateAvailableFrameRates() {
-            guard let device = captureDevice else { return }
-            
-            var rates = Set<Int>()
-            for format in device.formats {
-                for range in format.videoSupportedFrameRateRanges {
-                    let minRate = Int(range.minFrameRate)
-                    let maxRate = Int(range.maxFrameRate)
-                    // Check against our desired frame rates
-                    for rate in desiredFramerates {
-                        if rate >= minRate && rate <= maxRate {
-                            rates.insert(rate)
-                        }
+    let desiredFramerates = [20, 24, 30, 60, 120]
+    @Published var availableFramerates: [Int] = [20, 24, 30, 60, 120]  // Default values
+
+    // Update to include all desired frame rates
+    private func updateAvailableFrameRates() {
+        guard let device = captureDevice else { return }
+
+        var rates = Set<Int>()
+        for format in device.formats {
+            for range in format.videoSupportedFrameRateRanges {
+                let minRate = Int(range.minFrameRate)
+                let maxRate = Int(range.maxFrameRate)
+                // Check against our desired frame rates
+                for rate in desiredFramerates {
+                    if rate >= minRate && rate <= maxRate {
+                        rates.insert(rate)
                     }
                 }
             }
-            
-            availableFramerates = rates.sorted()
-            print("Available frame rates: \(availableFramerates)")
         }
-        
+
+        availableFramerates = rates.sorted()
+        print("Available frame rates: \(availableFramerates)")
+    }
+
     func setFrameRate(_ fps: Int) {
         guard availableFramerates.contains(fps) else {
             print("Frame rate \(fps) not supported")
             return
         }
-        
+
         // Only reconfigure if frame rate actually changed
         if fps != targetFPS {
             targetFPS = fps
             configureCamera()
         }
     }
-    
-    
+
     // Add video output properties
     private var videoOutput: AVCaptureVideoDataOutput!
-    private let videoProcessingQueue = DispatchQueue(label: "com.cinemadngrekorder.videoprocessing")
-    
+    private let videoProcessingQueue = DispatchQueue(
+        label: "com.cinemadngrekorder.videoprocessing")
+
     // Histogram publisher
     @Published var histogramPublisher = PassthroughSubject<[CGFloat], Never>()
 
@@ -1015,50 +1071,57 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     }
 
     // Histogram calculation function
-       private func calculateHistogramData(from pixelBuffer: CVPixelBuffer) -> [CGFloat] {
-           CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-           defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-           
-           guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
-               return Array(repeating: 0, count: 64)
-           }
-           
-           let width = CVPixelBufferGetWidth(pixelBuffer)
-           let height = CVPixelBufferGetHeight(pixelBuffer)
-           let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-           
-           var bins = [Int](repeating: 0, count: 64)
-           let totalPixels = width * height
-           let sampleStep = max(1, (totalPixels / 5000)) // Sample every 5000th pixel
-           
-           // Process pixels in batches
-           for y in 0..<height {
-               for x in 0..<width {
-                   guard (y * width + x) % sampleStep == 0 else { continue }
-                   
-                   let offset = y * bytesPerRow + x * 4
-                   let b = Double(baseAddress.load(fromByteOffset: offset, as: UInt8.self))
-                   let g = Double(baseAddress.load(fromByteOffset: offset + 1, as: UInt8.self))
-                   let r = Double(baseAddress.load(fromByteOffset: offset + 2, as: UInt8.self))
-                   
-                   // Calculate luminance (BT.709 formula)
-                   let luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b)
-                   let binIndex = Int(luminance / 4.0) // 256/64=4
-                   
-                   if binIndex >= 0 && binIndex < 64 {
-                       bins[binIndex] += 1
-                   }
-               }
-           }
-           
-           // Normalize bins
-           guard let maxValue = bins.max(), maxValue > 0 else {
-               return Array(repeating: 0, count: 64)
-           }
-           
-           return bins.map { CGFloat($0) / CGFloat(maxValue) }
-       }
-    
+    private func calculateHistogramData(from pixelBuffer: CVPixelBuffer)
+        -> [CGFloat]
+    {
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            return Array(repeating: 0, count: 64)
+        }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+
+        var bins = [Int](repeating: 0, count: 64)
+        let totalPixels = width * height
+        let sampleStep = max(1, (totalPixels / 5000))  // Sample every 5000th pixel
+
+        // Process pixels in batches
+        for y in 0..<height {
+            for x in 0..<width {
+                guard (y * width + x) % sampleStep == 0 else { continue }
+
+                let offset = y * bytesPerRow + x * 4
+                let b = Double(
+                    baseAddress.load(fromByteOffset: offset, as: UInt8.self))
+                let g = Double(
+                    baseAddress.load(fromByteOffset: offset + 1, as: UInt8.self)
+                )
+                let r = Double(
+                    baseAddress.load(fromByteOffset: offset + 2, as: UInt8.self)
+                )
+
+                // Calculate luminance (BT.709 formula)
+                let luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b)
+                let binIndex = Int(luminance / 4.0)  // 256/64=4
+
+                if binIndex >= 0 && binIndex < 64 {
+                    bins[binIndex] += 1
+                }
+            }
+        }
+
+        // Normalize bins
+        guard let maxValue = bins.max(), maxValue > 0 else {
+            return Array(repeating: 0, count: 64)
+        }
+
+        return bins.map { CGFloat($0) / CGFloat(maxValue) }
+    }
+
     @Published var isFocusLocked = false
 
     // Focus Lock
@@ -1068,6 +1131,13 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         do {
             try device.lockForConfiguration()
 
+            
+            // Lock exposure at current values
+                      if device.isExposureModeSupported(.locked) {
+                          device.exposureMode = .locked
+                          print("Exposure locked")
+                      }
+            
             // Lock focus at current setting
             if device.isFocusModeSupported(.locked) {
                 device.focusMode = .locked
@@ -1166,8 +1236,8 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     private var metricsTimer: Timer?
     private var captureStartTime: Date?
     // Increased buffer size
-    private let maxBufferSize = 50000  // Up from 100
-    private let maxMemoryFrames = 10000  // Keep only recent frames in memory
+    private let maxBufferSize = 500000  // Up from 100
+    private let maxMemoryFrames = 100000  // Keep only recent frames in memory
 
     // New buffer management properties
     private var frameDataCache = [Int: Data]()
@@ -1300,11 +1370,11 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             }
             .store(in: &cancellables)
     }
-    
+
     // White Balance Lock
     private func lockWhiteBalance() {
         guard let device = captureDevice else { return }
-        
+
         do {
             try device.lockForConfiguration()
             // Lock white balance at current setting
@@ -1322,7 +1392,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
 
     private func unlockWhiteBalance() {
         guard let device = captureDevice else { return }
-        
+
         do {
             try device.lockForConfiguration()
             // Revert to continuous auto white balance
@@ -1332,7 +1402,8 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             }
             device.unlockForConfiguration()
         } catch {
-            print("Error unlocking white balance: \(error.localizedDescription)")
+            print(
+                "Error unlocking white balance: \(error.localizedDescription)")
         }
     }
 
@@ -1372,16 +1443,17 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     // Camera Setup
     private func setupCamera() {
         // Add video output for histogram
-               videoOutput = AVCaptureVideoDataOutput()
-               videoOutput.setSampleBufferDelegate(self, queue: videoProcessingQueue)
-               videoOutput.videoSettings = [
-                   kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-               ]
-               
-               if captureSession.canAddOutput(videoOutput) {
-                   captureSession.addOutput(videoOutput)
-               }
-        
+        videoOutput = AVCaptureVideoDataOutput()
+        videoOutput.setSampleBufferDelegate(self, queue: videoProcessingQueue)
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String:
+                kCVPixelFormatType_32BGRA
+        ]
+
+        if captureSession.canAddOutput(videoOutput) {
+            captureSession.addOutput(videoOutput)
+        }
+
         captureSession.sessionPreset = .photo
 
         // Setup camera input
@@ -1400,7 +1472,6 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             try captureDevice.lockForConfiguration()
             minISO = captureDevice.activeFormat.minISO
             maxISO = captureDevice.activeFormat.maxISO
-            iso = captureDevice.iso
             captureDevice.unlockForConfiguration()
         } catch {
             print("Error getting ISO range: \(error)")
@@ -1482,9 +1553,21 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             }
 
             // Configure auto white balance
-            if captureDevice.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+            if captureDevice.isWhiteBalanceModeSupported(
+                .continuousAutoWhiteBalance)
+            {
                 captureDevice.whiteBalanceMode = .continuousAutoWhiteBalance
             }
+
+            // Set initial ISO to min + 1 stop (minISO * 2)
+            let initialISO = self.minISO * 2
+            let clampedISO = max(self.minISO, min(initialISO, self.maxISO))
+
+            // Set custom exposure
+            captureDevice.setExposureModeCustom(
+                duration: captureDevice.exposureDuration,
+                iso: clampedISO
+            )
 
             // Set frame rate for high-speed capture
             if captureDevice.activeFormat.videoSupportedFrameRateRanges
@@ -1551,7 +1634,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     func setFocusPoint(_ point: CGPoint) {
         // Add this guard condition to ignore focus changes during capture
         guard !isCapturing else { return }
-        
+
         guard let device = captureDevice else { return }
 
         // Visualize focus point
@@ -1712,7 +1795,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         captureTimer = timer
 
         lockFocus()
-          lockWhiteBalance() // ADD THIS LINE
+        lockWhiteBalance()  // ADD THIS LINE
     }
 
     // Stop Capture Logic
@@ -1762,7 +1845,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             }
 
             unlockFocus()
-             unlockWhiteBalance() // ADD THIS LINE
+            unlockWhiteBalance()  // ADD THIS LINE
 
         }
     }
@@ -1920,17 +2003,18 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             self.handleFrameCompletion(frameID: frameID, success: false)
         }
     }
-    
+
     func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
+        else { return }
+
         // Calculate histogram
         let histogramData = calculateHistogramData(from: pixelBuffer)
-        
+
         // Publish on main thread
         DispatchQueue.main.async {
             self.histogramPublisher.send(histogramData)
@@ -2066,7 +2150,6 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     }
 }
 
-
 // AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(
@@ -2098,7 +2181,6 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         }
     }
 }
-
 
 // Preview
 struct ContentView_Previews: PreviewProvider {
