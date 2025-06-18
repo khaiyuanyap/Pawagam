@@ -12,6 +12,9 @@ import Photos
 import SwiftUI
 import UniformTypeIdentifiers
 import MobileCoreServices
+import Metal
+import MetalKit
+import MetalPerformanceShaders
 
 // Add this outside any class/struct in the file
 private func formatTimeInterval(_ interval: TimeInterval) -> String {
@@ -1336,6 +1339,44 @@ struct CameraPreview: UIViewRepresentable {
 class CameraManager: NSObject, ObservableObject,
     AVCaptureVideoDataOutputSampleBufferDelegate
 {
+    private var metalDevice: MTLDevice!
+    private var metalCommandQueue: MTLCommandQueue!
+    private var histogramPipeline: MTLComputePipelineState!
+    private var textureCache: CVMetalTextureCache?
+    private var histogramBuffer: MTLBuffer!
+    private let histogramSemaphore = DispatchSemaphore(value: 1)
+
+    
+    private func setupMetal() {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            print("Metal is not supported on this device")
+            return
+        }
+        
+        metalDevice = device
+        metalCommandQueue = device.makeCommandQueue()
+        
+        // Create texture cache
+        CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, metalDevice, nil, &textureCache)
+        
+        // Create histogram buffer
+        histogramBuffer = metalDevice.makeBuffer(length: 256 * MemoryLayout<UInt32>.size,
+                                                options: .storageModeShared)
+        
+        // Load compute shader
+        guard let library = metalDevice.makeDefaultLibrary(),
+              let function = library.makeFunction(name: "luminanceHistogram") else {
+            print("Failed to create Metal shader")
+            return
+        }
+        
+        do {
+            histogramPipeline = try metalDevice.makeComputePipelineState(function: function)
+        } catch {
+            print("Failed to create pipeline state: \(error)")
+        }
+    }
+    
     private let savingSemaphore = DispatchSemaphore(value: 2)
     @Published var droppedFrames: Int = 0
     
@@ -1438,55 +1479,78 @@ class CameraManager: NSObject, ObservableObject,
     }
 
     // Histogram calculation function
-    private func calculateHistogramData(from pixelBuffer: CVPixelBuffer)
-        -> [CGFloat]
-    {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+    private func calculateHistogramData(from pixelBuffer: CVPixelBuffer) -> [CGFloat] {
+        guard histogramSemaphore.wait(timeout: .now() + 0.1) == .success else {
             return Array(repeating: 0, count: 64)
         }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-
-        var bins = [Int](repeating: 0, count: 64)
-        let totalPixels = width * height
-        let sampleStep = max(1, (totalPixels / 5000))  // Sample every 5000th pixel
-
-        // Process pixels in batches
-        for y in 0..<height {
-            for x in 0..<width {
-                guard (y * width + x) % sampleStep == 0 else { continue }
-
-                let offset = y * bytesPerRow + x * 4
-                let b = Double(
-                    baseAddress.load(fromByteOffset: offset, as: UInt8.self))
-                let g = Double(
-                    baseAddress.load(fromByteOffset: offset + 1, as: UInt8.self)
-                )
-                let r = Double(
-                    baseAddress.load(fromByteOffset: offset + 2, as: UInt8.self)
-                )
-
-                // Calculate luminance (BT.709 formula)
-                let luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b)
-                let binIndex = Int(luminance / 4.0)  // 256/64=4
-
-                if binIndex >= 0 && binIndex < 64 {
-                    bins[binIndex] += 1
-                }
-            }
+        defer { histogramSemaphore.signal() }
+        
+        // Reset histogram buffer
+        let bufferPtr = histogramBuffer.contents().bindMemory(to: UInt32.self, capacity: 256)
+        memset(bufferPtr, 0, 256 * MemoryLayout<UInt32>.size)
+        
+        // Create Metal texture
+        guard let textureCache = textureCache,
+              let metalTexture = createMetalTexture(from: pixelBuffer, using: textureCache) else {
+            return Array(repeating: 0, count: 64)
         }
-
-        // Normalize bins
+        
+        // Process with Metal
+        guard let commandBuffer = metalCommandQueue.makeCommandBuffer(),
+              let commandEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            return Array(repeating: 0, count: 64)
+        }
+        
+        commandEncoder.setComputePipelineState(histogramPipeline)
+        commandEncoder.setTexture(metalTexture, index: 0)
+        commandEncoder.setBuffer(histogramBuffer, offset: 0, index: 0)
+        
+        // Configure threadgroups
+        let threadgroupSize = MTLSize(width: 16, height: 16, depth: 1)
+        let threadgroupCount = MTLSize(
+            width: (metalTexture.width + threadgroupSize.width - 1) / threadgroupSize.width,
+            height: (metalTexture.height + threadgroupSize.height - 1) / threadgroupSize.height,
+            depth: 1
+        )
+        
+        commandEncoder.dispatchThreadgroups(threadgroupCount, threadsPerThreadgroup: threadgroupSize)
+        commandEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        
+        // Convert to normalized [0,1] values
+        let bins = (0..<64).map { CGFloat(bufferPtr[$0 * 4]) } // 256 bins → 64 bins
         guard let maxValue = bins.max(), maxValue > 0 else {
             return Array(repeating: 0, count: 64)
         }
+        
+        return bins.map { $0 / CGFloat(maxValue) }
+    }
 
-        return bins.map { CGFloat($0) / CGFloat(maxValue) }
+    private func createMetalTexture(from pixelBuffer: CVPixelBuffer, using textureCache: CVMetalTextureCache) -> MTLTexture? {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        
+        var cvMetalTexture: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            textureCache,
+            pixelBuffer,
+            nil,
+            .bgra8Unorm,
+            width,
+            height,
+            0,
+            &cvMetalTexture
+        )
+        
+        guard status == kCVReturnSuccess,
+              let unwrappedTexture = cvMetalTexture,
+              let texture = CVMetalTextureGetTexture(unwrappedTexture) else {
+            return nil
+        }
+        
+        return texture
     }
 
     @Published var isFocusLocked = false
@@ -1853,6 +1917,8 @@ class CameraManager: NSObject, ObservableObject,
 
     // Camera Setup
     private func setupCamera() {
+        setupMetal()
+
         // Add video output for histogram
         videoOutput = AVCaptureVideoDataOutput()
         videoOutput.setSampleBufferDelegate(self, queue: videoProcessingQueue)
@@ -1971,8 +2037,8 @@ class CameraManager: NSObject, ObservableObject,
                 captureDevice.whiteBalanceMode = .continuousAutoWhiteBalance
             }
 
-            // Set initial ISO to min + 1 stop (minISO * 2)
-            let initialISO = self.minISO * 2
+            // Set initial ISO to min
+            let initialISO = self.minISO
             let clampedISO = max(self.minISO, min(initialISO, self.maxISO))
 
             // Set custom exposure
@@ -2102,6 +2168,11 @@ class CameraManager: NSObject, ObservableObject,
             if device.isExposureModeSupported(.continuousAutoExposure) {
                 device.exposureMode = .continuousAutoExposure
             }
+            
+            device.setExposureModeCustom(
+                        duration: device.exposureDuration,
+                        iso: device.iso
+                    )
 
             device.unlockForConfiguration()
         } catch {
