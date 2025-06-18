@@ -13,6 +13,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 import MobileCoreServices
 
+// Add this outside any class/struct in the file
+private func formatTimeInterval(_ interval: TimeInterval) -> String {
+    let minutes = Int(interval) / 60
+    let seconds = Int(interval) % 60
+    return String(format: "%02d:%02d", minutes, seconds)
+}
+
 // User Preferences Keys
 struct UserPreferences {
     static let showGridKey = "showGrid"
@@ -1018,7 +1025,15 @@ struct SettingsView: View {
                     title: "Format",
                     value: cameraManager.pixelFormatName
                 )
-                
+                statusCard(
+                               icon: "clock.fill",
+                               title: cameraManager.isCapturing ? "Elapsed" : "Previous",
+                               value: formatTimeInterval(
+                                   cameraManager.isCapturing
+                                       ? cameraManager.elapsedTime
+                                       : cameraManager.lastRecordingDuration
+                               )
+                           )
             }
         }
     }
@@ -1323,6 +1338,8 @@ class CameraManager: NSObject, ObservableObject,
 {
     private let savingSemaphore = DispatchSemaphore(value: 2)
     @Published var droppedFrames: Int = 0
+    
+    @Published var lastRecordingDuration: TimeInterval = 0.0
     
     // User Preferences Properties
     @Published var showGrid: Bool = false {
@@ -2197,6 +2214,7 @@ class CameraManager: NSObject, ObservableObject,
     func stopCapture() {
         guard isCapturing else { return }
 
+        lastRecordingDuration = elapsedTime
         isCapturing = false
         isFinishing = true
         captureTimer?.cancel()
