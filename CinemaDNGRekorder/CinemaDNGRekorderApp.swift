@@ -13,7 +13,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import MobileCoreServices
 
-// MARK: - User Preferences Keys
+// User Preferences Keys
 struct UserPreferences {
     static let showGridKey = "showGrid"
     static let showHistogramKey = "showHistogram"
@@ -23,7 +23,7 @@ struct UserPreferences {
     static let directoryBookmarkKey = "captureDirectoryBookmark"
 }
 
-// MARK: - UserDefaults Extension
+// UserDefaults Extension
 extension UserDefaults {
     func bool(forKey key: String, defaultValue: Bool) -> Bool {
         if let value = self.value(forKey: key) as? Bool {
@@ -92,7 +92,7 @@ struct DNGCameraApp: App {
     }
 }
 
-// MARK: - URL Bookmark Extension
+// URL Bookmark Extension
 extension URL {
     func bookmarkData() -> Data? {
         do {
@@ -417,8 +417,29 @@ struct ContentView: View {
 
             // Capture Counter
             captureCounterView
+            
+            // Dropped Frames Indicator (NEW)
+                   if cameraManager.errorCount > 0 {
+                       HStack(spacing: 6) {
+                           Image(systemName: "exclamationmark.triangle.fill")
+                               .font(.system(size: 14, weight: .bold))
+                           Text("\(cameraManager.errorCount)")
+                               .font(.system(size: 16, weight: .semibold, design: .rounded))
+                       }
+                       .foregroundStyle(.white)
+                       .padding(.horizontal, 12)
+                       .padding(.vertical, 8)
+                       .background(.red.opacity(0.8), in: Capsule())
+                       .overlay(
+                           Capsule()
+                               .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                       )
+                       .transition(.scale.combined(with: .opacity))
+                   }
 
             Spacer()
+            
+           
 
             // Focus Lock Indicator
             Group {
@@ -435,6 +456,8 @@ struct ContentView: View {
             .frame(width: 44, height: 44)
             .background(.ultraThinMaterial, in: Circle())
             .transition(.scale.combined(with: .opacity))
+            
+            
         }
         .padding(.horizontal, 20)
         .padding(.top, 10)
@@ -756,7 +779,7 @@ extension Array {
     }
 }
 
-// MARK: - Directory Picker
+// Directory Picker
 struct DirectoryPicker: UIViewControllerRepresentable {
     @Binding var selectedURL: URL?
     @Environment(\.dismiss) var dismiss
@@ -991,16 +1014,11 @@ struct SettingsView: View {
                 )
 
                 statusCard(
-                    icon: "gearshape.2.fill",
-                    title: "Pipeline",
-                    value: cameraManager.pipelineStatus
-                )
-
-                statusCard(
                     icon: "camera.viewfinder",
                     title: "Format",
                     value: cameraManager.pixelFormatName
                 )
+                
             }
         }
     }
@@ -1303,7 +1321,10 @@ struct CameraPreview: UIViewRepresentable {
 class CameraManager: NSObject, ObservableObject,
     AVCaptureVideoDataOutputSampleBufferDelegate
 {
-    // MARK: - User Preferences Properties
+    private let savingSemaphore = DispatchSemaphore(value: 2)
+    @Published var droppedFrames: Int = 0
+    
+    // User Preferences Properties
     @Published var showGrid: Bool = false {
         didSet { savePreferences() }
     }
@@ -1588,8 +1609,7 @@ class CameraManager: NSObject, ObservableObject,
 
     private let fileSavingQueue = DispatchQueue(
         label: "com.cinemadngrekorder.filesaving",
-        qos: .utility,
-        attributes: .concurrent)  // Changed to concurrent
+        qos: .userInitiated)
 
     // Prioritization
     private var processingPriority = [Int: Bool]()
@@ -1633,7 +1653,7 @@ class CameraManager: NSObject, ObservableObject,
         label: "com.cinemadngrekorder.dngprocessing", qos: .userInitiated,
         attributes: .concurrent)
 
-    private var frameBuffer = [Int: (photo: AVCapturePhoto, timestamp: Date)]()
+    private var frameBuffer = [Int: Date]()  // frameID: timestamp
     private var nextFrameID = 1
     private var lastSavedFrameID = 0
     private let bufferLock = NSLock()
@@ -1652,7 +1672,7 @@ class CameraManager: NSObject, ObservableObject,
     }
     var captureDirectory: URL?
     
-    // MARK: - Preferences Management
+    // Preferences Management
     private func loadPreferences() {
         let defaults = UserDefaults.standard
         
@@ -2284,9 +2304,8 @@ class CameraManager: NSObject, ObservableObject,
             // Track frame in buffer
             self.bufferLock.lock()
             self.pendingFrames.insert(frameID)
-            self.frameBuffer[frameID] = (photo, Date())
+            self.frameBuffer[frameID] = Date()
             self.bufferLock.unlock()
-
             self.updatePipelineStatus()
 
             // Process based on format
@@ -2304,40 +2323,16 @@ class CameraManager: NSObject, ObservableObject,
         pipelineSemaphore.wait()
         rawProcessingQueue.async {
             defer { self.pipelineSemaphore.signal() }
-
+            
             guard let dngData = photo.fileDataRepresentation() else {
                 self.handleFrameCompletion(frameID: frameID, success: false)
                 return
             }
-
-            // Cache in memory or disk based on available memory
-            self.bufferLock.lock()
-
-            if self.frameDataCache.count < self.maxMemoryFrames
-                && !self.isLowMemory
-            {
-                // Keep in memory
-                self.frameDataCache[frameID] = dngData
-                self.bufferLock.unlock()
-                print("📦 Cached RAW frame \(frameID) in memory")
-            } else {
-                // Write to disk cache
-                self.bufferLock.unlock()
-                let cacheFile = self.diskCacheURL!.appendingPathComponent(
-                    "frame_\(frameID).dng")
-
-                do {
-                    try dngData.write(to: cacheFile)
-                    print("💾 Cached RAW frame \(frameID) to disk")
-                } catch {
-                    print("Disk cache write failed: \(error)")
-                    self.handleFrameCompletion(frameID: frameID, success: false)
-                    return
-                }
-            }
-
-            // Save to final destination
+            
+            // DIRECT SAVING - NO CACHE
+            self.savingSemaphore.wait()
             self.fileSavingQueue.async {
+                defer { self.savingSemaphore.signal() }
                 self.saveDNGData(dngData, frameID: frameID)
             }
         }
@@ -2396,34 +2391,17 @@ class CameraManager: NSObject, ObservableObject,
         }
     }
 
-    // Buffer Enhancements
     private func saveDNGData(_ dngData: Data, frameID: Int) {
-        guard let captureDir = captureDirectory else {
-            self.handleFrameCompletion(frameID: frameID, success: false)
-            return
-        }
-
+        guard let captureDir = captureDirectory else { return }
+        
         let filename = String(format: "IMG_%04d.dng", frameID)
         let fileURL = captureDir.appendingPathComponent(filename)
-
+        
         do {
-            // Check if we have a cached disk version
-            let cacheFile = diskCacheURL!.appendingPathComponent(
-                "frame_\(frameID).dng")
-            if FileManager.default.fileExists(atPath: cacheFile.path) {
-                // Move from cache instead of re-writing
-                try FileManager.default.moveItem(at: cacheFile, to: fileURL)
-                print("Moved DNG from cache: \(filename)")
-            } else {
-                // Write directly from memory
-                try dngData.write(to: fileURL)
-                print("Saved DNG from memory: \(filename)")
-            }
-
-            self.handleFrameCompletion(frameID: frameID, success: true)
+            try dngData.write(to: fileURL)
+            handleFrameCompletion(frameID: frameID, success: true)
         } catch {
-            print("Error saving DNG file: \(error.localizedDescription)")
-            self.handleFrameCompletion(frameID: frameID, success: false)
+            handleFrameCompletion(frameID: frameID, success: false)
         }
     }
 
@@ -2500,13 +2478,11 @@ class CameraManager: NSObject, ObservableObject,
     private func updatePipelineStatus() {
         bufferLock.lock()
         let captureCount = frameBuffer.count
-        let oldestTimestamp = frameBuffer.values.map { $0.timestamp }.min()
-        let age = oldestTimestamp.map { -$0.timeIntervalSinceNow } ?? 0
         bufferLock.unlock()
 
         let status =
-            "C:\(captureCount) P:\(ProcessInfo.processInfo.processorCount) A:\(String(format: "%.2f", age))s"
-
+            "C:\(captureCount) P:\(ProcessInfo.processInfo.processorCount)"
+        
         DispatchQueue.main.async {
             self.pipelineStatus = status
         }
