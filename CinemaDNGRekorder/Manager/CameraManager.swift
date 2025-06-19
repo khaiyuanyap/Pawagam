@@ -754,7 +754,7 @@ class CameraManager: NSObject, ObservableObject,
         DispatchQueue.global(qos: .userInitiated).async {
             self.captureSession.startRunning()
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.updateExposureSettings()
                 self.lockExposure()
             }
