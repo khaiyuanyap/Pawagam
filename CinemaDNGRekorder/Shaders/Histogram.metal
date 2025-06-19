@@ -1,5 +1,5 @@
 //
-//  SHaders.metal
+//  Histogram.metal
 //  CinemaDNGRekorder
 //
 //  Created by Khai Yuan Yap on 18/06/2025.
