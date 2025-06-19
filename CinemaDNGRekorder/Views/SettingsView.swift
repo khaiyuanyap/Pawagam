@@ -26,6 +26,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showDirectoryPicker = false
     @State private var selectedDirectoryURL: URL?
+    @State private var showAbout = false
 
     var body: some View {
         NavigationView {
@@ -45,6 +46,9 @@ struct SettingsView: View {
 
                     // Exposure Controls Section
                     exposureSection
+
+                    // About Section
+                    aboutSection
 
                     // Additional space at bottom
                     Spacer(minLength: 100)
@@ -73,6 +77,50 @@ struct SettingsView: View {
                         cameraManager.setCaptureDirectory(url)
                     }
                 }
+        }
+        .sheet(isPresented: $showAbout) {
+            AboutView()
+        }
+    }
+    
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionHeader(icon: "info.circle", title: "Information")
+            
+            Button(action: {
+                showAbout = true
+            }) {
+                HStack(spacing: 16) {
+                    Image(systemName: "questionmark.circle.fill")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("About & Help")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                        
+                        Text("Learn about features, settings, and tips")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(.white.opacity(0.1), lineWidth: 1)
+                )
+            }
+            .buttonStyle(ModernButtonStyle())
         }
     }
     
