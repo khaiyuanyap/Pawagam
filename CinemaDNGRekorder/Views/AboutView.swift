@@ -55,7 +55,7 @@ struct AboutView: View {
         VStack(spacing: 20) {
                        
     VStack(spacing: 8) {
-        HStack(spacing: 10) {
+        HStack(spacing: 11) {
                         Text("CinemaDNG")
                         Text("Rekorder")
                     }

@@ -32,6 +32,13 @@ struct SettingsView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
+                    
+                    // Exposure Controls Section
+                    exposureSection
+                    
+                    // Frame Rate Section
+                    frameRateSection
+                    
                     // Camera Status Section
                     statusSection
                     
@@ -40,12 +47,6 @@ struct SettingsView: View {
 
                     // Display Options
                     displaySection
-
-                    // Frame Rate Section
-                    frameRateSection
-
-                    // Exposure Controls Section
-                    exposureSection
 
                     // About Section
                     aboutSection

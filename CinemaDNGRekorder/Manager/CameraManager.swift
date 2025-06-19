@@ -16,17 +16,60 @@ import Metal
 import MetalKit
 import MetalPerformanceShaders
 
+
+
 // Camera Manager
 class CameraManager: NSObject, ObservableObject,
     AVCaptureVideoDataOutputSampleBufferDelegate
 {
+    private let deviceConfigurationQueue = DispatchQueue(label: "com.cinemadngrekorder.device.configuration")
+    
+    private var desiredExposureDuration: CMTime {
+        // USE CURRENT TARGET FPS
+        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFPS))
+        let exposureDurationSeconds = (shutterAngle / 360.0) * Double(frameDuration.seconds)
+        return CMTime(seconds: exposureDurationSeconds, preferredTimescale: 1_000_000)
+    }
+    
+    private func updateExposureSettings() {
+        guard let device = captureDevice else { return }
+        
+        // Clamp ISO to valid range
+        let clampedISO = max(minISO, min(iso, maxISO))
+        
+        deviceConfigurationQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            do {
+                try device.lockForConfiguration()
+                
+                // Force custom exposure mode
+                if device.isExposureModeSupported(.custom) {
+                    device.exposureMode = .custom
+                }
+                
+                // Set exposure using calculated duration and ISO
+                device.setExposureModeCustom(duration: self.desiredExposureDuration, iso: clampedISO)
+                device.unlockForConfiguration()
+                
+                // Update published ISO if clamping occurred
+                if clampedISO != self.iso {
+                    DispatchQueue.main.async {
+                        self.iso = clampedISO
+                    }
+                }
+            } catch {
+                print("Error setting exposure: \(error.localizedDescription)")
+            }
+        }
+    }
+    
     private var metalDevice: MTLDevice!
     private var metalCommandQueue: MTLCommandQueue!
     private var histogramPipeline: MTLComputePipelineState!
     private var textureCache: CVMetalTextureCache?
     private var histogramBuffer: MTLBuffer!
     private let histogramSemaphore = DispatchSemaphore(value: 1)
-
     
     private func setupMetal() {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -76,6 +119,7 @@ class CameraManager: NSObject, ObservableObject,
         didSet {
             if oldValue != targetFPS {
                 setFrameRate(targetFPS)
+                updateExposureSettings() // Add this line
                 savePreferences()
             }
         }
@@ -83,21 +127,25 @@ class CameraManager: NSObject, ObservableObject,
     
     @Published var iso: Float = 100.0 {
         didSet {
+            guard !isCapturing else { return } // Prevent changes during capture
             if oldValue != iso {
-                setExposure(iso: iso)
+                updateExposureSettings()
                 savePreferences()
             }
         }
     }
-    
+
+    // Updated shutter angle property
     @Published var shutterAngle: Double = 180.0 {
         didSet {
+            guard !isCapturing else { return }
             if oldValue != shutterAngle {
-                setShutterAngle(shutterAngle)
+                updateExposureSettings()
                 savePreferences()
             }
         }
     }
+
     
     // Directory bookmark properties
     private let directoryBookmarkKey = UserPreferences.directoryBookmarkKey
@@ -236,34 +284,28 @@ class CameraManager: NSObject, ObservableObject,
 
     @Published var isFocusLocked = false
 
-    // Focus Lock
     private func lockFocus() {
         guard let device = captureDevice else { return }
 
-        do {
-            try device.lockForConfiguration()
-
-            
-            // Lock exposure at current values
-                      if device.isExposureModeSupported(.locked) {
-                          device.exposureMode = .locked
-                          print("Exposure locked")
-                      }
-            
-            // Lock focus at current setting
-            if device.isFocusModeSupported(.locked) {
-                device.focusMode = .locked
-                DispatchQueue.main.async {
-                    self.isFocusLocked = true
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
+                
+                // FOCUS LOCKING ONLY (no exposure)
+                if device.isFocusModeSupported(.locked) {
+                    device.focusMode = .locked
+                    DispatchQueue.main.async {
+                        self.isFocusLocked = true
+                    }
+                    print("Focus locked")
+                } else {
+                    print("Locked focus mode not supported")
                 }
-                print("Focus locked")
-            } else {
-                print("Locked focus mode not supported")
-            }
 
-            device.unlockForConfiguration()
-        } catch {
-            print("Error locking focus: \(error.localizedDescription)")
+                device.unlockForConfiguration()
+            } catch {
+                print("Error locking focus: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -484,13 +526,13 @@ class CameraManager: NSObject, ObservableObject,
        override init() {
            // Initialize semaphore first
            self.pipelineSemaphore = DispatchSemaphore(
-               value: ProcessInfo.processInfo.processorCount)
-           
-           super.init()
-           
-           // Load preferences BEFORE setting up camera
-           loadPreferences()
-           setupCamera()
+                  value: ProcessInfo.processInfo.processorCount)
+              
+              super.init()
+              
+              // Load preferences BEFORE setting up camera
+              loadPreferences()
+              setupCamera()
 
            // Setup disk cache
            setupDiskCache()
@@ -527,39 +569,41 @@ class CameraManager: NSObject, ObservableObject,
             .store(in: &cancellables)
     }
 
-    // White Balance Lock
     private func lockWhiteBalance() {
         guard let device = captureDevice else { return }
 
-        do {
-            try device.lockForConfiguration()
-            // Lock white balance at current setting
-            if device.isWhiteBalanceModeSupported(.locked) {
-                device.whiteBalanceMode = .locked
-                print("White balance locked")
-            } else {
-                print("Locked white balance mode not supported")
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
+                // Lock white balance at current setting
+                if device.isWhiteBalanceModeSupported(.locked) {
+                    device.whiteBalanceMode = .locked
+                    print("White balance locked")
+                } else {
+                    print("Locked white balance mode not supported")
+                }
+                device.unlockForConfiguration()
+            } catch {
+                print("Error locking white balance: \(error.localizedDescription)")
             }
-            device.unlockForConfiguration()
-        } catch {
-            print("Error locking white balance: \(error.localizedDescription)")
         }
     }
 
     private func unlockWhiteBalance() {
         guard let device = captureDevice else { return }
 
-        do {
-            try device.lockForConfiguration()
-            // Revert to continuous auto white balance
-            if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
-                device.whiteBalanceMode = .continuousAutoWhiteBalance
-                print("White balance unlocked")
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
+                // Revert to continuous auto white balance
+                if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                    device.whiteBalanceMode = .continuousAutoWhiteBalance
+                    print("White balance unlocked")
+                }
+                device.unlockForConfiguration()
+            } catch {
+                print("Error unlocking white balance: \(error.localizedDescription)")
             }
-            device.unlockForConfiguration()
-        } catch {
-            print(
-                "Error unlocking white balance: \(error.localizedDescription)")
         }
     }
 
@@ -626,13 +670,28 @@ class CameraManager: NSObject, ObservableObject,
         captureDevice = camera
 
         do {
-            // Get ISO range
-            try captureDevice.lockForConfiguration()
-            minISO = captureDevice.activeFormat.minISO
-            maxISO = captureDevice.activeFormat.maxISO
-            captureDevice.unlockForConfiguration()
-        } catch {
-            print("Error getting ISO range: \(error)")
+            
+            
+            deviceConfigurationQueue.sync {
+                do {
+                    try captureDevice.lockForConfiguration()
+                    minISO = captureDevice.activeFormat.minISO
+                    maxISO = captureDevice.activeFormat.maxISO
+                    
+                    // FORCE CUSTOM EXPOSURE MODE
+                    if captureDevice.isExposureModeSupported(.custom) {
+                        captureDevice.exposureMode = .custom
+                    }
+                    
+                    captureDevice.unlockForConfiguration()
+                } catch {
+                    print("Error getting ISO range: \(error)")
+                }
+            }
+            
+            // APPLY USER PREFERENCES
+            updateExposureSettings()
+            
         }
 
         do {
@@ -694,59 +753,65 @@ class CameraManager: NSObject, ObservableObject,
         // Start session
         DispatchQueue.global(qos: .userInitiated).async {
             self.captureSession.startRunning()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.updateExposureSettings()
+                self.lockExposure()
+            }
         }
+
     }
 
     private func configureCamera() {
-        do {
-            try captureDevice.lockForConfiguration()
+        deviceConfigurationQueue.async { [weak self] in
+            guard let self = self, let device = self.captureDevice else { return }
+            
+            do {
+                try device.lockForConfiguration()
+                
+                // Configure autofocus
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
 
-            // Configure autofocus
-            if captureDevice.isFocusModeSupported(.continuousAutoFocus) {
-                captureDevice.focusMode = .continuousAutoFocus
+                // Configure auto white balance
+                if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                    device.whiteBalanceMode = .continuousAutoWhiteBalance
+                }
+
+                // Set frame rate for high-speed capture
+                if device.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= Double(self.targetFPS) }) {
+                    let timeValue = CMTimeValue(1)
+                    let timeScale = CMTimeScale(self.targetFPS)
+                    device.activeVideoMinFrameDuration = CMTime(value: timeValue, timescale: timeScale)
+                    device.activeVideoMaxFrameDuration = CMTime(value: timeValue, timescale: timeScale)
+                }
+                
+                // MAINTAIN CUSTOM EXPOSURE MODE
+                if device.isExposureModeSupported(.custom) {
+                    device.exposureMode = .custom
+                }
+                
+                // Apply exposure settings
+                let clampedISO = max(self.minISO, min(self.iso, self.maxISO))
+                device.setExposureModeCustom(
+                    duration: self.desiredExposureDuration,
+                    iso: clampedISO
+                )
+                
+                device.unlockForConfiguration()
+            } catch {
+                print("Error configuring camera: \(error)")
+                DispatchQueue.main.async {
+                    self.showError("Camera configuration failed: \(error.localizedDescription)")
+                }
             }
-
-            // CHANGE EXPOSURE MODE TO LOCKED
-            if captureDevice.isExposureModeSupported(.locked) {
-                captureDevice.exposureMode = .locked  // Disable auto-exposure
+            
+            // Update frame rates on main thread
+            DispatchQueue.main.async {
+                self.updateAvailableFrameRates()
             }
-
-            // Configure auto white balance
-            if captureDevice.isWhiteBalanceModeSupported(
-                .continuousAutoWhiteBalance)
-            {
-                captureDevice.whiteBalanceMode = .continuousAutoWhiteBalance
-            }
-
-            // Set initial ISO to min
-            let initialISO = self.minISO
-            let clampedISO = max(self.minISO, min(initialISO, self.maxISO))
-
-            // Set custom exposure
-            captureDevice.setExposureModeCustom(
-                duration: captureDevice.exposureDuration,
-                iso: clampedISO
-            )
-
-            // Set frame rate for high-speed capture
-            if captureDevice.activeFormat.videoSupportedFrameRateRanges
-                .contains(where: { $0.maxFrameRate >= Double(targetFPS) })
-            {
-                let timeValue = CMTimeValue(1)
-                let timeScale = CMTimeScale(targetFPS)
-                captureDevice.activeVideoMinFrameDuration = CMTime(
-                    value: timeValue, timescale: timeScale)
-                captureDevice.activeVideoMaxFrameDuration = CMTime(
-                    value: timeValue, timescale: timeScale)
-            }
-
-            captureDevice.unlockForConfiguration()
-        } catch {
-            print("Error configuring camera: \(error)")
-            showError(
-                "Camera configuration failed: \(error.localizedDescription)")
         }
-        updateAvailableFrameRates()
     }
 
     // Exposure Control
@@ -805,25 +870,27 @@ class CameraManager: NSObject, ObservableObject,
             self?.focusPoint = nil
         }
 
-        do {
-            try device.lockForConfiguration()
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
 
-            // Check if point of interest is supported
-            if device.isFocusPointOfInterestSupported {
-                device.focusPointOfInterest = point
+                // Check if point of interest is supported
+                if device.isFocusPointOfInterestSupported {
+                    device.focusPointOfInterest = point
 
-                if device.isFocusModeSupported(.autoFocus) {
-                    device.focusMode = .autoFocus
-                } else if device.isFocusModeSupported(.continuousAutoFocus) {
-                    device.focusMode = .continuousAutoFocus
+                    if device.isFocusModeSupported(.autoFocus) {
+                        device.focusMode = .autoFocus
+                    } else if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    }
                 }
-            }
-            device.unlockForConfiguration()
+                device.unlockForConfiguration()
 
-            // Reset focus to continuous after delay
-            resetFocusAfterDelay()
-        } catch {
-            print("Error setting focus point: \(error.localizedDescription)")
+                // Reset focus to continuous after delay
+                self.resetFocusAfterDelay()
+            } catch {
+                print("Error setting focus point: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -839,25 +906,21 @@ class CameraManager: NSObject, ObservableObject,
     private func resetToContinuousFocus() {
         guard let device = captureDevice else { return }
 
-        do {
-            try device.lockForConfiguration()
-
-            if device.isFocusModeSupported(.continuousAutoFocus) {
-                device.focusMode = .continuousAutoFocus
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
+                
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                    DispatchQueue.main.async {
+                        self.isFocusLocked = false
+                    }
+                }
+                
+                device.unlockForConfiguration()
+            } catch {
+                print("Error resetting focus: \(error.localizedDescription)")
             }
-
-            if device.isExposureModeSupported(.continuousAutoExposure) {
-                device.exposureMode = .continuousAutoExposure
-            }
-            
-            device.setExposureModeCustom(
-                        duration: device.exposureDuration,
-                        iso: device.iso
-                    )
-
-            device.unlockForConfiguration()
-        } catch {
-            print("Error resetting focus: \(error.localizedDescription)")
         }
     }
 
@@ -958,8 +1021,10 @@ class CameraManager: NSObject, ObservableObject,
         timer.resume()
         captureTimer = timer
 
+        updateExposureSettings()
+        
         lockFocus()
-        lockWhiteBalance()  // ADD THIS LINE
+        lockWhiteBalance()
     }
 
     // Stop Capture Logic
@@ -1042,6 +1107,7 @@ class CameraManager: NSObject, ObservableObject,
                 return
             }
 
+
             // Create photo settings with the supported raw pixel format
             let photoSettings: AVCapturePhotoSettings
 
@@ -1059,6 +1125,11 @@ class CameraManager: NSObject, ObservableObject,
             // Configure settings for speed
             photoSettings.isHighResolutionPhotoEnabled = false
             photoSettings.flashMode = .off
+            
+            // SUPPRESS SHUTTER SOUND IF SUPPORTED
+            if #available(iOS 14.0, *), self.photoOutput.isShutterSoundSuppressionSupported {
+                photoSettings.isShutterSoundSuppressionEnabled = true
+            }
 
             // Capture photo
             DispatchQueue.main.async {
