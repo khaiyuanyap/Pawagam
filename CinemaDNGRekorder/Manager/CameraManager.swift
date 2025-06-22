@@ -16,12 +16,83 @@ import Metal
 import MetalKit
 import MetalPerformanceShaders
 
-
-
 // Camera Manager
 class CameraManager: NSObject, ObservableObject,
     AVCaptureVideoDataOutputSampleBufferDelegate
 {
+    
+    @Published var isLoadingCameras = true
+
+    
+    @Published var availableCameras: [CameraInfo] = []
+    @Published var selectedCameraID: String = "" {
+           didSet {
+               if !selectedCameraID.isEmpty && oldValue != selectedCameraID {
+                   reconfigureCamera()
+                   savePreferences()
+               }
+           }
+       }
+       
+       private var initialSetupDone = false
+    @Published var currentCameraType: String = "Wide"
+
+    // Add this struct inside CameraManager or at the top level
+    struct CameraInfo: Identifiable {
+        let id: String
+        let device: AVCaptureDevice
+        let position: AVCaptureDevice.Position
+        let type: String
+    }
+
+    // Add this method to CameraManager
+    private func discoverCameras() {
+        var discoveredCameras: [CameraInfo] = []
+        
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .builtInTelephotoCamera, .builtInUltraWideCamera],
+            mediaType: .video,
+            position: .unspecified
+        )
+        
+        for device in discoverySession.devices {
+            let cameraType: String
+            switch device.deviceType {
+            case .builtInTelephotoCamera:
+                cameraType = "Telephoto"
+            case .builtInUltraWideCamera:
+                cameraType = "Ultra-wide"
+            default:
+                cameraType = "Wide"
+            }
+            
+            discoveredCameras.append(CameraInfo(
+                id: device.uniqueID,
+                device: device,
+                position: device.position,
+                type: cameraType
+            ))
+        }
+        
+        print("Available cameras: \(discoveredCameras.map { "\($0.type) (\($0.position == .back ? "Back" : "Front"))" })")
+            
+            DispatchQueue.main.async { [weak self] in
+                self?.availableCameras = discoveredCameras
+                self?.isLoadingCameras = false
+                
+                // Set default camera if none selected
+                if let self = self, self.selectedCameraID.isEmpty {
+                    if let backWideCamera = discoveredCameras.first(where: {
+                        $0.position == .back && $0.type == "Wide"
+                    }) {
+                        self.selectedCameraID = backWideCamera.id
+                        self.currentCameraType = "Wide"
+                        self.reconfigureCamera()
+                    }
+                }
+            }
+    }
+    
     private let deviceConfigurationQueue = DispatchQueue(label: "com.cinemadngrekorder.device.configuration")
     
     private var desiredExposureDuration: CMTime {
@@ -145,7 +216,134 @@ class CameraManager: NSObject, ObservableObject,
             }
         }
     }
+    
+    @Published var cameraPosition: AVCaptureDevice.Position = .back {
+        didSet {
+            if oldValue != cameraPosition {
+                reconfigureCamera()
+            }
+        }
+    }
 
+    
+     func reconfigureCamera() {
+         deviceConfigurationQueue.async { [weak self] in
+             guard let self = self else { return }
+             
+             // Stop session
+             self.captureSession.stopRunning()
+             
+             // Remove existing inputs
+             for input in self.captureSession.inputs {
+                 self.captureSession.removeInput(input)
+             }
+             
+             // Find the selected camera device
+             guard let selectedCamera = self.availableCameras.first(where: {
+                 $0.id == self.selectedCameraID
+             })?.device else {
+                 self.showError("Selected camera not available")
+                 return
+             }
+             
+             self.captureDevice = selectedCamera
+             
+             // UPDATE MIN/MAX ISO FOR NEW CAMERA
+             do {
+                 try selectedCamera.lockForConfiguration()
+                 // Get new ISO range
+                             let newMinISO = selectedCamera.activeFormat.minISO
+                             let newMaxISO = selectedCamera.activeFormat.maxISO
+                             
+                             // Clamp current ISO to new camera's range
+                             let clampedISO = max(newMinISO, min(self.iso, newMaxISO))
+                             
+                             selectedCamera.unlockForConfiguration()
+                             
+                             // Update published properties on main thread
+                             DispatchQueue.main.async {
+                                 self.minISO = newMinISO
+                                 self.maxISO = newMaxISO
+                                 if clampedISO != self.iso {
+                                     self.iso = clampedISO
+                                 }
+                             }
+                         } catch {
+                             print("Error updating ISO range: \(error)")
+                             DispatchQueue.main.async {
+                                 self.showError("Error configuring camera: \(error.localizedDescription)")
+                             }
+                         }
+                         
+                         // Rest of camera configuration remains the same...
+                         do {
+                             let input = try AVCaptureDeviceInput(device: selectedCamera)
+                             if self.captureSession.canAddInput(input) {
+                                 self.captureSession.addInput(input)
+                             }
+                         } catch {
+                             self.showError("Unable to create camera input: \(error.localizedDescription)")
+                             return
+                         }
+            
+            do {
+                let input = try AVCaptureDeviceInput(device: selectedCamera)
+                if self.captureSession.canAddInput(input) {
+                    self.captureSession.addInput(input)
+                }
+            } catch {
+                self.showError("Unable to create camera input: \(error.localizedDescription)")
+                return
+            }
+            
+            let supportedFormats = self.photoOutput.availableRawPhotoPixelFormatTypes
+                print("Available raw formats: \(supportedFormats)")
+                
+                // Select a compatible format using local variables
+                var selectedFormat: OSType = 0
+                var newPixelFormatName = "Unknown"
+                
+                if supportedFormats.contains(kCVPixelFormatType_14Bayer_RGGB) {
+                    selectedFormat = kCVPixelFormatType_14Bayer_RGGB
+                    newPixelFormatName = "14b RGGB"
+                } else if supportedFormats.contains(kCVPixelFormatType_14Bayer_GRBG) {
+                    selectedFormat = kCVPixelFormatType_14Bayer_GRBG
+                    newPixelFormatName = "14b GRBG"
+                } else if supportedFormats.contains(kCVPixelFormatType_14Bayer_BGGR) {
+                    selectedFormat = kCVPixelFormatType_14Bayer_BGGR
+                    newPixelFormatName = "14b BGGR"
+                } else if supportedFormats.contains(kCVPixelFormatType_14Bayer_GBRG) {
+                    selectedFormat = kCVPixelFormatType_14Bayer_GBRG
+                    newPixelFormatName = "14b GBRG"
+                } else if let firstFormat = supportedFormats.first {
+                    selectedFormat = firstFormat
+                    newPixelFormatName = "Raw \(firstFormat)"
+                } else {
+                    newPixelFormatName = "JPEG"
+                    print("Device doesn't support raw photo capture")
+                }
+                
+                // Update published properties on main thread
+                DispatchQueue.main.async {
+                    self.supportedRawPixelFormats = supportedFormats
+                    self.selectedRawPixelFormat = selectedFormat
+                    self.pixelFormatName = newPixelFormatName
+                }
+            
+            // Configure camera settings
+            self.configureCamera()
+            
+            // Restart session
+            self.captureSession.startRunning()
+            
+            // Update UI
+            DispatchQueue.main.async {
+                self.currentCameraType = selectedCamera.deviceType == .builtInTelephotoCamera ? "Telephoto" :
+                                         selectedCamera.deviceType == .builtInUltraWideCamera ? "Ultra-wide" : "Wide"
+                self.pixelFormatName = newPixelFormatName
+            }
+        }
+    }
     
     // Directory bookmark properties
     private let directoryBookmarkKey = UserPreferences.directoryBookmarkKey
@@ -175,7 +373,10 @@ class CameraManager: NSObject, ObservableObject,
             }
         }
 
-        availableFramerates = rates.sorted()
+        let sortedRates = rates.sorted()
+        DispatchQueue.main.async { [weak self] in
+            self?.availableFramerates = sortedRates
+        }
         print("Available frame rates: \(availableFramerates)")
     }
 
@@ -294,8 +495,8 @@ class CameraManager: NSObject, ObservableObject,
                 // FOCUS LOCKING ONLY (no exposure)
                 if device.isFocusModeSupported(.locked) {
                     device.focusMode = .locked
-                    DispatchQueue.main.async {
-                        self.isFocusLocked = true
+                    DispatchQueue.main.async { [weak self] in
+                        self?.isFocusLocked = true
                     }
                     print("Focus locked")
                 } else {
@@ -317,8 +518,8 @@ class CameraManager: NSObject, ObservableObject,
 
             if device.isFocusModeSupported(.continuousAutoFocus) {
                 device.focusMode = .continuousAutoFocus
-                DispatchQueue.main.async {
-                    self.isFocusLocked = false
+                DispatchQueue.main.async { [weak self] in
+                    self?.isFocusLocked = false
                 }
                 print("Focus unlocked")
             }
@@ -337,8 +538,8 @@ class CameraManager: NSObject, ObservableObject,
 
             if device.isFocusModeSupported(.continuousAutoFocus) {
                 device.focusMode = .continuousAutoFocus
-                DispatchQueue.main.async {
-                    self.isFocusLocked = false
+                DispatchQueue.main.async { [weak self] in
+                    self?.isFocusLocked = false
                 }
                 print("Focus reset to continuous")
             }
@@ -350,8 +551,8 @@ class CameraManager: NSObject, ObservableObject,
     }
 
     // Raw Format Support
-      private var supportedRawPixelFormats: [OSType] = []
-      private var selectedRawPixelFormat: OSType = 0
+    @Published var supportedRawPixelFormats: [OSType] = []
+    @Published var selectedRawPixelFormat: OSType = 0
     
     // Exposure properties
     @Published var minISO: Float = 0.0
@@ -486,6 +687,10 @@ class CameraManager: NSObject, ObservableObject,
         iso = defaults.float(forKey: UserPreferences.isoKey, defaultValue: 100.0)
         shutterAngle = defaults.double(forKey: UserPreferences.shutterAngleKey, defaultValue: 180.0)
         
+        if let savedCameraID = defaults.string(forKey: UserPreferences.selectedCameraIDKey) {
+                   selectedCameraID = savedCameraID
+               }
+        
         // Directory loading
         if let data = defaults.data(forKey: UserPreferences.directoryBookmarkKey),
            let url = URL.fromBookmarkData(data) {
@@ -503,6 +708,7 @@ class CameraManager: NSObject, ObservableObject,
         defaults.set(targetFPS, forKey: UserPreferences.targetFPSKey)
         defaults.set(iso, forKey: UserPreferences.isoKey)
         defaults.set(shutterAngle, forKey: UserPreferences.shutterAngleKey)
+        defaults.set(selectedCameraID, forKey: UserPreferences.selectedCameraIDKey)
         
         if let url = captureDirectoryURL, let bookmark = url.bookmarkData() {
             defaults.set(bookmark, forKey: UserPreferences.directoryBookmarkKey)
@@ -524,6 +730,7 @@ class CameraManager: NSObject, ObservableObject,
 
        // Initialization
        override init() {
+           
            // Initialize semaphore first
            self.pipelineSemaphore = DispatchSemaphore(
                   value: ProcessInfo.processInfo.processorCount)
@@ -533,6 +740,8 @@ class CameraManager: NSObject, ObservableObject,
               // Load preferences BEFORE setting up camera
               loadPreferences()
               setupCamera()
+           
+           initialSetupDone = true
 
            // Setup disk cache
            setupDiskCache()
@@ -644,6 +853,9 @@ class CameraManager: NSObject, ObservableObject,
     private func setupCamera() {
         setupMetal()
 
+        discoverCameras()
+        
+        
         // Add video output for histogram
         videoOutput = AVCaptureVideoDataOutput()
         videoOutput.setSampleBufferDelegate(self, queue: videoProcessingQueue)
@@ -657,6 +869,14 @@ class CameraManager: NSObject, ObservableObject,
         }
 
         captureSession.sessionPreset = .photo
+        
+        if selectedCameraID.isEmpty,
+                   let backWideCamera = availableCameras.first(where: {
+                       $0.position == .back && $0.type == "Wide"
+                   }) {
+                    selectedCameraID = backWideCamera.id
+                    currentCameraType = "Wide"
+                }
 
         // Setup camera input
         guard
@@ -712,40 +932,6 @@ class CameraManager: NSObject, ObservableObject,
         if captureSession.canAddOutput(photoOutput) {
             captureSession.addOutput(photoOutput)
         }
-        
-
-        // Get supported raw formats
-        supportedRawPixelFormats = photoOutput.availableRawPhotoPixelFormatTypes
-        print("Available raw formats: \(supportedRawPixelFormats)")
-
-        // Prefer 14-bit Bayer if available, otherwise use any available format
-        if supportedRawPixelFormats.contains(kCVPixelFormatType_14Bayer_RGGB) {
-            selectedRawPixelFormat = kCVPixelFormatType_14Bayer_RGGB
-            pixelFormatName = "14b RGGB"
-        } else if supportedRawPixelFormats.contains(
-            kCVPixelFormatType_14Bayer_GRBG)
-        {
-            selectedRawPixelFormat = kCVPixelFormatType_14Bayer_GRBG
-            pixelFormatName = "14b GRBG"
-        } else if supportedRawPixelFormats.contains(
-            kCVPixelFormatType_14Bayer_BGGR)
-        {
-            selectedRawPixelFormat = kCVPixelFormatType_14Bayer_BGGR
-            pixelFormatName = "14b BGGR"
-        } else if supportedRawPixelFormats.contains(
-            kCVPixelFormatType_14Bayer_GBRG)
-        {
-            selectedRawPixelFormat = kCVPixelFormatType_14Bayer_GBRG
-            pixelFormatName = "14b GBRG"
-        } else if let firstFormat = supportedRawPixelFormats.first {
-            selectedRawPixelFormat = firstFormat
-            pixelFormatName = "Raw \(firstFormat)"
-        } else {
-            pixelFormatName = "JPEG"
-            print("Device doesn't support raw photo capture")
-        }
-
-        print("Selected format: \(pixelFormatName)")
 
         // Configure camera for high-speed capture and autofocus
         configureCamera()
@@ -912,8 +1098,8 @@ class CameraManager: NSObject, ObservableObject,
                 
                 if device.isFocusModeSupported(.continuousAutoFocus) {
                     device.focusMode = .continuousAutoFocus
-                    DispatchQueue.main.async {
-                        self.isFocusLocked = false
+                    DispatchQueue.main.async { [weak self] in
+                        self?.isFocusLocked = false
                     }
                 }
                 

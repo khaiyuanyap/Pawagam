@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  CinemaDNGRekorder
 //
-//  Created by Khai Yuan Yap on 19/06/2025.
+//  Khai Yuan Yap
 //
 
 import AVFoundation
@@ -20,7 +20,7 @@ import MetalPerformanceShaders
 struct ContentView: View {
     // Standard Increments
     let standardISOs: [Double] = [
-        25, 50, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800,
+        24, 25, 50, 54, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800,
         1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000,
         10000, 12800, 16000, 20000, 25600, 32000, 40000, 51200,
     ]
@@ -29,9 +29,7 @@ struct ContentView: View {
         1, 2, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360,
     ]
 
-    private func roundToIncrement(_ value: Double, increments: [Double])
-        -> Double
-    {
+    private func roundToIncrement(_ value: Double, increments: [Double]) -> Double {
         guard !increments.isEmpty else { return value }
         let first = increments[0]
         let last = increments[increments.count - 1]
@@ -67,6 +65,10 @@ struct ContentView: View {
     @StateObject private var cameraManager = CameraManager()
     @State private var showSettings = false
     @State private var captureButtonScale: CGFloat = 1.0
+    
+    // New state for exposure controls
+    @State private var showISOPopup = false
+    @State private var showShutterPopup = false
 
     var body: some View {
         ZStack {
@@ -114,6 +116,9 @@ struct ContentView: View {
                 bottomControls
             }
             
+            // Exposure Control Popups
+            exposurePopups
+            
             // Modern Capture Complete Popup
             if cameraManager.showCaptureComplete {
                 modernCaptureCompletePopup
@@ -139,6 +144,67 @@ struct ContentView: View {
                 cameraManager.lockExposure()
             }
         }
+    }
+    
+    // MARK: - Exposure Control Popups
+    private var exposurePopups: some View {
+        ZStack(alignment: .bottom) {
+            // Dismissal background
+            if showISOPopup || showShutterPopup {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.spring()) {
+                            showISOPopup = false
+                            showShutterPopup = false
+                        }
+                    }
+            }
+            
+            VStack(spacing: 0) {
+                Spacer()
+                
+                // ISO Popup
+                if showISOPopup {
+                    ExposureControl(
+                        icon: "circle.lefthalf.striped.horizontal",
+                        title: "ISO",
+                        value: Binding<Double>(
+                            get: { Double(cameraManager.iso) },
+                            set: { cameraManager.iso = Float($0) }
+                        ),
+                        range: Double(cameraManager.minISO)...Double(cameraManager.maxISO),
+                        increments: standardISOs.filter {
+                            $0 >= Double(cameraManager.minISO) && $0 <= Double(cameraManager.maxISO)
+                        },
+                        displayValue: "\(Int(cameraManager.iso))",
+                        roundToIncrement: roundToIncrement
+                    )
+                    .padding()
+                    .padding(.horizontal)
+                    .padding(.bottom, 55)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                
+                // Shutter Popup
+                if showShutterPopup {
+                    ExposureControl(
+                        icon: "righttriangle.fill",
+                        title: "Shutter Angle",
+                        value: $cameraManager.shutterAngle,
+                        range: 1...360,
+                        increments: standardShutterAngles,
+                        displayValue: "\(Int(cameraManager.shutterAngle))°",
+                        roundToIncrement: roundToIncrement
+                    )
+                    .padding()
+                    .padding(.horizontal)
+                    .padding(.bottom, 55)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+        }
+        .zIndex(1) // Ensure popups appear above other content
     }
 
     private var modernCaptureCompletePopup: some View {
@@ -312,28 +378,26 @@ struct ContentView: View {
             // Capture Counter
             captureCounterView
             
-            // Dropped Frames Indicator (NEW)
-                   if cameraManager.errorCount > 0 {
-                       HStack(spacing: 6) {
-                           Image(systemName: "exclamationmark.triangle.fill")
-                               .font(.system(size: 14, weight: .bold))
-                           Text("\(cameraManager.errorCount)")
-                               .font(.system(size: 16, weight: .semibold, design: .rounded))
-                       }
-                       .foregroundStyle(.white)
-                       .padding(.horizontal, 12)
-                       .padding(.vertical, 8)
-                       .background(.red.opacity(0.8), in: Capsule())
-                       .overlay(
-                           Capsule()
-                               .stroke(.white.opacity(0.15), lineWidth: 0.5)
-                       )
-                       .transition(.scale.combined(with: .opacity))
-                   }
+            // Dropped Frames Indicator
+            if cameraManager.errorCount > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14, weight: .bold))
+                    Text("\(cameraManager.errorCount)")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.red.opacity(0.8), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                )
+                .transition(.scale.combined(with: .opacity))
+            }
 
             Spacer()
-            
-           
 
             // Focus Lock Indicator
             Group {
@@ -350,8 +414,6 @@ struct ContentView: View {
             .frame(width: 44, height: 44)
             .background(.ultraThinMaterial, in: Circle())
             .transition(.scale.combined(with: .opacity))
-            
-            
         }
         .padding(.horizontal, 20)
         .padding(.top, 10)
@@ -398,14 +460,56 @@ struct ContentView: View {
                             .smooth(duration: 0.3)))
             }
 
-            // Main Capture Button
-            captureButton
+            // Main Capture Button with exposure controls
+            HStack(spacing: 15) { // Reduced spacing between buttons
+                // ISO Button
+                exposureControlButton(
+                    icon: "circle.lefthalf.striped.horizontal",
+                    isActive: showISOPopup,
+                    action: {
+                        withAnimation(.spring()) {
+                            showShutterPopup = false
+                            showISOPopup.toggle()
+                        }
+                    }
+                )
+                
+                // Main Capture Button
+                captureButton
+                
+                // Shutter Button
+                exposureControlButton(
+                    icon: "righttriangle",
+                    isActive: showShutterPopup,
+                    action: {
+                        withAnimation(.spring()) {
+                            showISOPopup = false
+                            showShutterPopup.toggle()
+                        }
+                    }
+                )
+            }
+            .padding(.horizontal, 24) // Reduced side padding
 
             // Status Text
             statusText
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 40)
+        .padding(.horizontal, 16) // Reduced outer padding
+        .padding(.bottom)
+    }
+    
+    private func exposureControlButton(icon: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 50, height: 50)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(isActive ? Color.yellow : Color.clear, lineWidth: 2)
+                )
+        }
     }
 
     private var recordingIndicator: some View {
@@ -535,6 +639,68 @@ struct ContentView: View {
             cameraManager.stopCapture()
         } else if !cameraManager.isFinishing {
             cameraManager.startCapture()
+        }
+    }
+    
+    // MARK: - Exposure Control Component
+    struct ExposureControl: View {
+        let icon: String
+        let title: String
+        @Binding var value: Double
+        let range: ClosedRange<Double>
+        let increments: [Double]
+        let displayValue: String
+        let roundToIncrement: (Double, [Double]) -> Double
+        
+        var body: some View {
+            let roundedBinding = Binding<Double>(
+                get: { value },
+                set: { newValue in
+                    let rounded = roundToIncrement(newValue, increments)
+                    value = rounded
+                }
+            )
+            
+            return VStack(spacing: 16) {
+                HStack {
+                    HStack(spacing: 12) {
+                        Image(systemName: icon)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .frame(width: 20, height: 20)
+                        
+                        Text(title)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .textCase(.uppercase)
+                            .tracking(0.5)
+                    }
+                    
+                    Spacer()
+                    
+                    Text(displayValue)
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(.white.opacity(0.2), lineWidth: 1)
+                        )
+                }
+                
+                Slider(value: roundedBinding, in: range)
+                    .tint(.white)
+                    .padding(.horizontal, 4)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(.white.opacity(0.1), lineWidth: 1)
+            )
         }
     }
 }

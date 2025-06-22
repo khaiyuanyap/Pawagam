@@ -31,6 +31,7 @@ struct UserPreferences {
     static let isoKey = "iso"
     static let shutterAngleKey = "shutterAngle"
     static let directoryBookmarkKey = "captureDirectoryBookmark"
+    static let selectedCameraIDKey = "selectedCameraID"
 }
 
 // UserDefaults Extension
