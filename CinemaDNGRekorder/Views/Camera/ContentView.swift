@@ -31,6 +31,7 @@ struct ContentView: View {
 
     private func roundToIncrement(_ value: Double, increments: [Double]) -> Double {
         guard !increments.isEmpty else { return value }
+        let clampedValue = min(max(value, Double(cameraManager.minISO)), Double(cameraManager.maxISO))
         let first = increments[0]
         let last = increments[increments.count - 1]
 
@@ -167,11 +168,14 @@ struct ContentView: View {
                 // ISO Popup
                 if showISOPopup {
                     ExposureControl(
-                        icon: "circle.lefthalf.striped.horizontal",
+                        icon: "circle.bottomrighthalf.pattern.checkered",
                         title: "ISO",
                         value: Binding<Double>(
                             get: { Double(cameraManager.iso) },
-                            set: { cameraManager.iso = Float($0) }
+                            set: {
+                                let clampedValue = min(max($0, Double(cameraManager.minISO)), Double(cameraManager.maxISO))
+                                cameraManager.iso = Float(clampedValue)
+                            }
                         ),
                         range: Double(cameraManager.minISO)...Double(cameraManager.maxISO),
                         increments: standardISOs.filter {
@@ -189,7 +193,7 @@ struct ContentView: View {
                 // Shutter Popup
                 if showShutterPopup {
                     ExposureControl(
-                        icon: "righttriangle.fill",
+                        icon: "righttriangle",
                         title: "Shutter Angle",
                         value: $cameraManager.shutterAngle,
                         range: 1...360,
@@ -370,6 +374,10 @@ struct ContentView: View {
                     .frame(width: 44, height: 44)
                     .background(.ultraThinMaterial, in: Circle())
                     .contentShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                    )
             }
             .buttonStyle(ModernButtonStyle())
 
@@ -464,7 +472,7 @@ struct ContentView: View {
             HStack(spacing: 15) { // Reduced spacing between buttons
                 // ISO Button
                 exposureControlButton(
-                    icon: "circle.lefthalf.striped.horizontal",
+                    icon: "circle.bottomrighthalf.pattern.checkered",
                     isActive: showISOPopup,
                     action: {
                         withAnimation(.spring()) {
@@ -507,7 +515,7 @@ struct ContentView: View {
                 .background(.ultraThinMaterial, in: Circle())
                 .overlay(
                     Circle()
-                        .stroke(isActive ? Color.yellow : Color.clear, lineWidth: 2)
+                        .stroke(isActive ? Color.yellow : Color.white.opacity(0.15), lineWidth: 0.5)
                 )
         }
     }
@@ -652,7 +660,24 @@ struct ContentView: View {
         let displayValue: String
         let roundToIncrement: (Double, [Double]) -> Double
         
+        // Your custom presets
+        let isoPresets = [100.0, 200.0, 800.0, 3200.0]
+        let shutterPresets = [45.0, 90.0, 180.0, 360.0]
+        
+        var presets: [Double] {
+            if title == "ISO" {
+                return isoPresets
+            } else {
+                return shutterPresets
+            }
+        }
+        
         var body: some View {
+            // Calculate actual slider range based on increments
+            let sliderRange = increments.min()!...increments.max()!
+            let minValue = increments.min()!
+            let maxValue = increments.max()!
+            
             let roundedBinding = Binding<Double>(
                 get: { value },
                 set: { newValue in
@@ -690,16 +715,62 @@ struct ContentView: View {
                         )
                 }
                 
-                Slider(value: roundedBinding, in: range)
+                Slider(value: roundedBinding, in: sliderRange)
                     .tint(.white)
-                    .padding(.horizontal, 4)
+                
+                // ISO range indicators
+                HStack {
+                    Text("Min: \(Int(minValue))")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                    
+                    Spacer()
+                    
+                    Text("Max: \(Int(maxValue))")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                
+                ScrollView(.horizontal) {
+                    HStack(spacing: 10) {
+                        ForEach(presets, id: \.self) { preset in
+                            Button(action: {
+                                withAnimation(.spring()) {
+                                    value = preset
+                                }
+                            }) {
+                                Text("\(Int(preset))")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(
+                                        value == preset ? .black : .white
+                                    )
+                                    .frame(minWidth: 44)
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 10)
+                                    .background(
+                                        value == preset ? Color.white : Color.clear
+                                    )
+                                    .cornerRadius(8)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(
+                                                value == preset ? Color.white : Color.white.opacity(0.3),
+                                                lineWidth: value == preset ? 0 : 1
+                                            )
+                                    )
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 44)
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
             .overlay(
                 RoundedRectangle(cornerRadius: 20)
-                    .stroke(.white.opacity(0.1), lineWidth: 1)
+                    .stroke(.white.opacity(0.15), lineWidth: 0.5)
             )
         }
     }

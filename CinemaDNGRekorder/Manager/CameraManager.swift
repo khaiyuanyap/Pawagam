@@ -18,7 +18,8 @@ import MetalPerformanceShaders
 
 // Camera Manager
 class CameraManager: NSObject, ObservableObject,
-    AVCaptureVideoDataOutputSampleBufferDelegate
+    AVCaptureVideoDataOutputSampleBufferDelegate,
+    AVCaptureAudioDataOutputSampleBufferDelegate // Added Audio Delegate
 {
     
     @Published var isLoadingCameras = true
@@ -295,6 +296,9 @@ class CameraManager: NSObject, ObservableObject,
                 self.showError("Unable to create camera input: \(error.localizedDescription)")
                 return
             }
+             
+             // Add the audio input back
+             self.addAudioInput()
             
             let supportedFormats = self.photoOutput.availableRawPhotoPixelFormatTypes
                 print("Available raw formats: \(supportedFormats)")
@@ -397,6 +401,19 @@ class CameraManager: NSObject, ObservableObject,
     private var videoOutput: AVCaptureVideoDataOutput!
     private let videoProcessingQueue = DispatchQueue(
         label: "com.cinemadngrekorder.videoprocessing")
+    
+    // --- START: Audio Recording Properties ---
+    private var audioOutput: AVCaptureAudioDataOutput!
+    private var assetWriter: AVAssetWriter?
+    private var assetWriterInput: AVAssetWriterInput?
+    private let audioProcessingQueue = DispatchQueue(label: "com.cinemadngrekorder.audioprocessing")
+    private var isAudioSessionStarted = false
+    private var audioFileURL: URL?
+    private var audioInput: AVCaptureDeviceInput?
+    // --- NEW: Properties for high-quality audio ---
+    private var audioSampleRate: Double = 48000.0 // Default to high quality
+    private var audioChannelCount: Int = 2        // Default to stereo
+    // --- END: Audio Recording Properties ---
 
     // Histogram publisher
     @Published var histogramPublisher = PassthroughSubject<[CGFloat], Never>()
@@ -728,35 +745,39 @@ class CameraManager: NSObject, ObservableObject,
            1.0 / Double(targetFPS)
        }
 
-       // Initialization
-       override init() {
-           
-           // Initialize semaphore first
-           self.pipelineSemaphore = DispatchSemaphore(
-                  value: ProcessInfo.processInfo.processorCount)
-              
-              super.init()
-              
-              // Load preferences BEFORE setting up camera
-              loadPreferences()
-              setupCamera()
-           
-           initialSetupDone = true
+    // Initialization
+    override init() {
+        // Initialize semaphore first
+        self.pipelineSemaphore = DispatchSemaphore(
+            value: ProcessInfo.processInfo.processorCount
+        )
+        
+        super.init()
+        
+        // --- NEW: Configure audio session early for high-quality input ---
+        configureAudioSession()
+        
+        // Load preferences BEFORE setting up camera
+        loadPreferences()
+        setupCamera()
+        
+        initialSetupDone = true
+        
+        // Setup disk cache
+        setupDiskCache()
+        
+        // Memory warning observer
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMemoryWarning),
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+        
+        // Setup exposure observers
+        setupExposureObservers()
+    }
 
-           // Setup disk cache
-           setupDiskCache()
-
-           // Memory warning observer
-           NotificationCenter.default.addObserver(
-               self,
-               selector: #selector(handleMemoryWarning),
-               name: UIApplication.didReceiveMemoryWarningNotification,
-               object: nil
-           )
-
-           // Setup exposure observers
-           setupExposureObservers()
-       }
     deinit {
         NotificationCenter.default.removeObserver(self)
         focusPointTimer?.invalidate()
@@ -852,9 +873,9 @@ class CameraManager: NSObject, ObservableObject,
     // Camera Setup
     private func setupCamera() {
         setupMetal()
-
         discoverCameras()
         
+        captureSession.beginConfiguration()
         
         // Add video output for histogram
         videoOutput = AVCaptureVideoDataOutput()
@@ -867,16 +888,28 @@ class CameraManager: NSObject, ObservableObject,
         if captureSession.canAddOutput(videoOutput) {
             captureSession.addOutput(videoOutput)
         }
+        
+        // Add audio output for recording
+        addAudioInput()
+        audioOutput = AVCaptureAudioDataOutput()
+        if captureSession.canAddOutput(audioOutput) {
+            audioOutput.setSampleBufferDelegate(self, queue: audioProcessingQueue)
+            captureSession.addOutput(audioOutput)
+            print("Audio output added to session.")
+        } else {
+            print("Could not add audio output to session.")
+        }
+
 
         captureSession.sessionPreset = .photo
         
         if selectedCameraID.isEmpty,
-                   let backWideCamera = availableCameras.first(where: {
-                       $0.position == .back && $0.type == "Wide"
-                   }) {
-                    selectedCameraID = backWideCamera.id
-                    currentCameraType = "Wide"
-                }
+           let backWideCamera = availableCameras.first(where: {
+               $0.position == .back && $0.type == "Wide"
+           }) {
+            selectedCameraID = backWideCamera.id
+            currentCameraType = "Wide"
+        }
 
         // Setup camera input
         guard
@@ -884,21 +917,19 @@ class CameraManager: NSObject, ObservableObject,
                 .builtInWideAngleCamera, for: .video, position: .back)
         else {
             showError("Unable to access camera")
+            captureSession.commitConfiguration()
             return
         }
 
         captureDevice = camera
 
         do {
-            
-            
             deviceConfigurationQueue.sync {
                 do {
                     try captureDevice.lockForConfiguration()
                     minISO = captureDevice.activeFormat.minISO
                     maxISO = captureDevice.activeFormat.maxISO
                     
-                    // FORCE CUSTOM EXPOSURE MODE
                     if captureDevice.isExposureModeSupported(.custom) {
                         captureDevice.exposureMode = .custom
                     }
@@ -908,10 +939,7 @@ class CameraManager: NSObject, ObservableObject,
                     print("Error getting ISO range: \(error)")
                 }
             }
-            
-            // APPLY USER PREFERENCES
             updateExposureSettings()
-            
         }
 
         do {
@@ -922,6 +950,7 @@ class CameraManager: NSObject, ObservableObject,
         } catch {
             showError(
                 "Unable to create camera input: \(error.localizedDescription)")
+            captureSession.commitConfiguration()
             return
         }
 
@@ -935,6 +964,8 @@ class CameraManager: NSObject, ObservableObject,
 
         // Configure camera for high-speed capture and autofocus
         configureCamera()
+        
+        captureSession.commitConfiguration()
 
         // Start session
         DispatchQueue.global(qos: .userInitiated).async {
@@ -945,8 +976,59 @@ class CameraManager: NSObject, ObservableObject,
                 self.lockExposure()
             }
         }
-
     }
+    
+    // --- START: New High-Quality Audio Helper Functions ---
+    
+    // NEW: Configures the shared audio session for recording.
+    private func configureAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            // Use .videoRecording mode to optimize microphone selection and processing.
+            try session.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
+            
+            // Prefer a high sample rate. The actual rate will be determined by the hardware.
+            try session.setPreferredSampleRate(48000)
+            
+            try session.setActive(true)
+            print("AVAudioSession configured for high-quality recording.")
+        } catch {
+            print("Failed to configure AVAudioSession: \(error)")
+            // Optionally show an error to the user.
+        }
+    }
+    
+    // MODIFIED: Gets audio device and sets quality parameters from the active session.
+    private func addAudioInput() {
+        guard let audioDevice = AVCaptureDevice.default(for: .audio) else {
+            print("Could not find default audio device.")
+            return
+        }
+        
+        // Update sample rate and channel count based on the active audio session's properties.
+        let session = AVAudioSession.sharedInstance()
+        self.audioSampleRate = session.sampleRate // Use the session's actual hardware sample rate.
+        self.audioChannelCount = min(session.inputNumberOfChannels, 2) // Use session's channels, max 2 for stereo.
+        if self.audioChannelCount == 0 { self.audioChannelCount = 1 } // Failsafe for mono.
+
+        print("Audio hardware configuration: \(audioSampleRate) Hz, \(audioChannelCount) channels.")
+
+        do {
+            let input = try AVCaptureDeviceInput(device: audioDevice)
+            if captureSession.canAddInput(input) {
+                // If an old audio input exists, remove it before adding the new one.
+                if let existingAudioInput = self.audioInput {
+                    captureSession.removeInput(existingAudioInput)
+                }
+                captureSession.addInput(input)
+                self.audioInput = input
+                print("Audio input added to session.")
+            }
+        } catch {
+            print("Could not create audio device input: \(error)")
+        }
+    }
+    // --- END: New High-Quality Audio Helper Functions ---
 
     private func configureCamera() {
         deviceConfigurationQueue.async { [weak self] in
@@ -1115,10 +1197,19 @@ class CameraManager: NSObject, ObservableObject,
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             DispatchQueue.main.async {
                 if granted {
-                    // Reset focus when permissions are granted
                     self?.resetFocus()
                 } else {
                     self?.showError("Camera access is required for this app")
+                }
+            }
+        }
+        
+        // Request audio permissions.
+        AVAudioSession.sharedInstance().requestRecordPermission { granted in
+            if !granted {
+                print("Audio permissions were not granted.")
+                DispatchQueue.main.async {
+                    self.showError("Audio permission is required to record sound.")
                 }
             }
         }
@@ -1130,25 +1221,17 @@ class CameraManager: NSObject, ObservableObject,
 
     // Capture Control
     func startCapture() {
-        // Reset metrics
         elapsedTime = 0
 
-        // Start metrics timer
         captureStartTime = Date()
         metricsTimer = Timer.scheduledTimer(
             withTimeInterval: 1.0, repeats: true
         ) { [weak self] _ in
-            guard let self = self else { return }
-
-            // Update elapsed time
-            if let startTime = self.captureStartTime {
-                self.elapsedTime = Date().timeIntervalSince(startTime)
-            }
+            guard let self = self, let startTime = self.captureStartTime else { return }
+            self.elapsedTime = Date().timeIntervalSince(startTime)
         }
 
         pendingFrames.removeAll()
-
-        // Use selected directory instead of hard-coded path
         let baseDirectory = captureDirectoryURL ?? documentsPath.appendingPathComponent("DNG_Captures")
         
         let formatter = DateFormatter()
@@ -1159,31 +1242,21 @@ class CameraManager: NSObject, ObservableObject,
         guard var captureDir = captureDirectory else { return }
 
         do {
-            // Create the directories
-            try FileManager.default.createDirectory(
-                at: baseDirectory,
-                withIntermediateDirectories: true
-            )
-            try FileManager.default.createDirectory(
-                at: captureDir,
-                withIntermediateDirectories: true
-            )
-
-            // Make sure the files are visible in Files app
+            try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: captureDir, withIntermediateDirectories: true)
             var resourceValues = URLResourceValues()
             resourceValues.isExcludedFromBackup = false
             try captureDir.setResourceValues(resourceValues)
-
             print("Created capture directory: \(captureDir.path)")
-
         } catch {
-            showError(
-                "Failed to create capture directory: \(error.localizedDescription)"
-            )
+            showError("Failed to create capture directory: \(error.localizedDescription)")
             return
         }
+        
+        // --- START: Setup Audio Writer ---
+        setupAudioWriter()
+        // --- END: Setup Audio Writer ---
 
-        // Reset pipeline state
         isCapturing = true
         isFinishing = false
         captureCount = 0
@@ -1195,20 +1268,13 @@ class CameraManager: NSObject, ObservableObject,
         updateStatusText("Capturing...")
         updatePipelineStatus()
 
-        // Start high-speed capture timer
-        let timer = DispatchSource.makeTimerSource(
-            queue: DispatchQueue(label: "com.cinemadngrekorder.capturetimer"))
-        timer.schedule(
-            deadline: .now(), repeating: captureInterval,
-            leeway: .milliseconds(1))
-        timer.setEventHandler { [weak self] in
-            self?.capturePhoto()
-        }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.cinemadngrekorder.capturetimer"))
+        timer.schedule(deadline: .now(), repeating: captureInterval, leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in self?.capturePhoto() }
         timer.resume()
         captureTimer = timer
 
         updateExposureSettings()
-        
         lockFocus()
         lockWhiteBalance()
     }
@@ -1223,104 +1289,145 @@ class CameraManager: NSObject, ObservableObject,
         captureTimer?.cancel()
         captureTimer = nil
         updateStatusText("Finishing...")
+        
+        // --- START: Finish Audio Recording ---
+        // Finish audio writing first as it's quick
+        finishAudioRecording()
+        // --- END: Finish Audio Recording ---
 
-        // Use a dedicated queue for finishing to prevent deadlocks
         finishQueue.async { [weak self] in
             guard let self = self else { return }
 
-            // Wait for pending frames with timeout
-            let result = self.captureGroup?.wait(
-                timeout: .now() + self.maxWaitTime)
+            let result = self.captureGroup?.wait(timeout: .now() + self.maxWaitTime)
 
-            // Check if we timed out
             if result == .timedOut {
-                print("Timeout waiting for frames to finish")
-
-                // Force complete any remaining frames
+                print("Timeout waiting for DNG frames to finish")
                 self.bufferLock.lock()
                 let remainingFrames = self.pendingFrames
                 self.bufferLock.unlock()
-
                 for frameID in remainingFrames {
                     print("Force completing frame \(frameID)")
                     self.captureGroup?.leave()
                 }
             }
 
-            // Final cleanup
             self.bufferLock.lock()
             self.pendingFrames.removeAll()
             self.frameBuffer.removeAll()
             self.bufferLock.unlock()
 
-            // Final UI updates
             DispatchQueue.main.async {
                 self.isFinishing = false
                 self.updateStatusText("Ready")
                 self.showCaptureComplete = true
             }
 
-            unlockFocus()
-            unlockWhiteBalance()  // ADD THIS LINE
-
+            self.unlockFocus()
+            self.unlockWhiteBalance()
         }
     }
+    
+    // --- START: New Audio Writer Setup/Teardown Functions ---
+    // MODIFIED: Configures the writer for uncompressed LPCM in a .wav container.
+    private func setupAudioWriter() {
+        guard let captureDir = captureDirectory else { return }
+        // Create audio file name from the capture directory name
+        let directoryName = captureDir.lastPathComponent
+        let audioFileName = "\(directoryName)_audio.wav"
+        audioFileURL = captureDir.appendingPathComponent(audioFileName)
+        
+        do {
+            // Use .wav file type
+            assetWriter = try AVAssetWriter(url: audioFileURL!, fileType: .wav)
+            
+            // Define settings for uncompressed LPCM audio (high quality)
+            let audioSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: audioSampleRate,
+                AVNumberOfChannelsKey: audioChannelCount,
+                AVLinearPCMBitDepthKey: 24, // 24-bit is a pro-audio standard
+                AVLinearPCMIsBigEndianKey: false, // Standard for WAV on Apple platforms
+                AVLinearPCMIsFloatKey: false, // Use float PCM
+                AVLinearPCMIsNonInterleaved: false // Standard interleaved format
+            ]
+            
+            print("Using audio settings: \(audioSettings)")
+            
+            assetWriterInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            assetWriterInput?.expectsMediaDataInRealTime = true
+            
+            if let writerInput = assetWriterInput, let writer = assetWriter, writer.canAdd(writerInput) {
+                writer.add(writerInput)
+                writer.startWriting()
+                isAudioSessionStarted = false // Reset session flag
+                print("Audio writer started for high-quality WAV.")
+            } else {
+                print("Could not add asset writer input for WAV.")
+                assetWriter = nil
+            }
+        } catch {
+            print("Failed to create asset writer for WAV: \(error)")
+            assetWriter = nil
+        }
+    }
+    
+    private func finishAudioRecording() {
+        audioProcessingQueue.async { [weak self] in
+            guard let self = self, let writer = self.assetWriter, writer.status == .writing else {
+                return
+            }
+            
+            self.assetWriterInput?.markAsFinished()
+            writer.finishWriting {
+                DispatchQueue.main.async {
+                    if writer.status == .completed {
+                        print("Audio file saved successfully to \(self.audioFileURL?.lastPathComponent ?? "N/A")")
+                    } else {
+                        print("Failed to save audio file. Error: \(writer.error?.localizedDescription ?? "Unknown error")")
+                    }
+                    self.assetWriter = nil
+                    self.assetWriterInput = nil
+                    self.audioFileURL = nil
+                }
+            }
+        }
+    }
+    // --- END: New Audio Writer Setup/Teardown Functions ---
 
     private func capturePhoto() {
-        // Skip if buffer full
         bufferLock.lock()
         let currentBufferSize = frameBuffer.count
         bufferLock.unlock()
 
         if currentBufferSize >= maxBufferSize {
-            print(
-                "Skipping capture: buffer full (\(currentBufferSize)/\(maxBufferSize))"
-            )
+            print("Skipping capture: buffer full (\(currentBufferSize)/\(maxBufferSize))")
             return
         }
 
         captureSerialQueue.async {
-            // Check buffer size
             self.bufferLock.lock()
             let currentBufferSize = self.frameBuffer.count
             self.bufferLock.unlock()
 
-            // Skip if buffer full or system busy
             if currentBufferSize >= self.maxBufferSize {
-                print(
-                    "Skipping capture: buffer full (\(currentBufferSize)/\(self.maxBufferSize))"
-                )
+                print("Skipping capture: buffer full (\(currentBufferSize)/\(self.maxBufferSize))")
                 return
             }
 
-
-            // Create photo settings with the supported raw pixel format
             let photoSettings: AVCapturePhotoSettings
-
             if self.supportedRawPixelFormats.isEmpty {
-                // Fallback to JPEG if no raw formats available
                 photoSettings = AVCapturePhotoSettings()
-                print("Falling back to JPEG capture")
             } else {
-                // Use supported raw format
-                photoSettings = AVCapturePhotoSettings(
-                    rawPixelFormatType: self.selectedRawPixelFormat
-                )
+                photoSettings = AVCapturePhotoSettings(rawPixelFormatType: self.selectedRawPixelFormat)
             }
-
-            // Configure settings for speed
             photoSettings.isHighResolutionPhotoEnabled = false
             photoSettings.flashMode = .off
-            
-            // SUPPRESS SHUTTER SOUND IF SUPPORTED
             if #available(iOS 14.0, *), self.photoOutput.isShutterSoundSuppressionSupported {
                 photoSettings.isShutterSoundSuppressionEnabled = true
             }
 
-            // Capture photo
             DispatchQueue.main.async {
-                self.photoOutput.capturePhoto(
-                    with: photoSettings, delegate: self)
+                self.photoOutput.capturePhoto(with: photoSettings, delegate: self)
             }
         }
     }
@@ -1328,14 +1435,12 @@ class CameraManager: NSObject, ObservableObject,
     // Pipeline Processing
     private func processFrame(_ photo: AVCapturePhoto, frameID: Int) {
         pipelineQueue.async {
-            // Track frame in buffer
             self.bufferLock.lock()
             self.pendingFrames.insert(frameID)
             self.frameBuffer[frameID] = Date()
             self.bufferLock.unlock()
             self.updatePipelineStatus()
 
-            // Process based on format
             if self.supportedRawPixelFormats.contains(where: {
                 $0 == self.selectedRawPixelFormat
             }) {
@@ -1356,7 +1461,6 @@ class CameraManager: NSObject, ObservableObject,
                 return
             }
             
-            // DIRECT SAVING - NO CACHE
             self.savingSemaphore.wait()
             self.fileSavingQueue.async {
                 defer { self.savingSemaphore.signal() }
@@ -1376,47 +1480,64 @@ class CameraManager: NSObject, ObservableObject,
             }
 
             let uiImage = UIImage(cgImage: cgImage)
-            guard let jpegData = uiImage.jpegData(compressionQuality: 0.9)
-            else {
+            guard let jpegData = uiImage.jpegData(compressionQuality: 0.9) else {
                 self.handleFrameCompletion(frameID: frameID, success: false)
                 return
             }
-
+            // Note: JPEG data is generated but not saved here in this branch.
+            // Assuming the main path is raw processing.
         }
     }
 
     private func processImageData(_ photo: AVCapturePhoto, frameID: Int) {
-        // Try to get raw DNG data first
         if let dngData = photo.fileDataRepresentation() {
             self.saveDNGData(dngData, frameID: frameID)
-        }
-        // If raw not available, try to get processed data
-        else if let cgImage = photo.previewCGImageRepresentation() {
+        } else if let cgImage = photo.previewCGImageRepresentation() {
             self.saveProcessedData(cgImage, frameID: frameID)
-        }
-        // If both fail, report error
-        else {
+        } else {
             print("Failed to get any image data for frame \(frameID)")
             self.handleFrameCompletion(frameID: frameID, success: false)
         }
     }
-
+    
+    // --- START: Unified captureOutput Delegate Method ---
     func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
-        else { return }
-
-        // Calculate histogram
-        let histogramData = calculateHistogramData(from: pixelBuffer)
-
-        // Publish on main thread
-        DispatchQueue.main.async {
-            self.histogramPublisher.send(histogramData)
+        if output == videoOutput {
+            // Handle video buffer for histogram
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            let histogramData = calculateHistogramData(from: pixelBuffer)
+            DispatchQueue.main.async {
+                self.histogramPublisher.send(histogramData)
+            }
+        } else if output == audioOutput {
+            // Handle audio buffer for recording
+            handleAudioSampleBuffer(sampleBuffer)
         }
     }
+    
+    private func handleAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        guard isCapturing,
+              let writer = assetWriter,
+              let writerInput = assetWriterInput,
+              writer.status == .writing
+        else { return }
+        
+        if !isAudioSessionStarted {
+            let startTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            writer.startSession(atSourceTime: startTime)
+            isAudioSessionStarted = true
+        }
+        
+        if writerInput.isReadyForMoreMediaData {
+            writerInput.append(sampleBuffer)
+        }
+    }
+    // --- END: Unified captureOutput Delegate Method ---
+
 
     private func saveDNGData(_ dngData: Data, frameID: Int) {
         guard let captureDir = captureDirectory else { return }
@@ -1462,15 +1583,12 @@ class CameraManager: NSObject, ObservableObject,
 
     private func handleFrameCompletion(frameID: Int, success: Bool) {
         pipelineQueue.async {
-            // Cleanup cache
             self.bufferLock.lock()
             self.pendingFrames.remove(frameID)
             self.frameBuffer.removeValue(forKey: frameID)
             self.frameDataCache.removeValue(forKey: frameID)
 
-            // Remove disk cache if exists
-            let cacheFile = self.diskCacheURL!.appendingPathComponent(
-                "frame_\(frameID).dng")
+            let cacheFile = self.diskCacheURL!.appendingPathComponent("frame_\(frameID).dng")
             if FileManager.default.fileExists(atPath: cacheFile.path) {
                 try? FileManager.default.removeItem(at: cacheFile)
             }
@@ -1538,23 +1656,18 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
             let currentFrameID = self.nextFrameID
             self.nextFrameID += 1
 
-            // Enter group for this frame BEFORE processing
             self.captureGroup?.enter()
 
-            // Update capture count
             DispatchQueue.main.async {
                 self.captureCount = currentFrameID
             }
 
             if let error = error {
                 print("Error processing photo: \(error.localizedDescription)")
-                // Handle error immediately
-                self.handleFrameCompletion(
-                    frameID: currentFrameID, success: false)
+                self.handleFrameCompletion(frameID: currentFrameID, success: false)
                 return
             }
 
-            // Process frame
             self.processFrame(photo, frameID: currentFrameID)
         }
     }

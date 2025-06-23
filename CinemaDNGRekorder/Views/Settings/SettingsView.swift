@@ -164,11 +164,10 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     statusSection
-                    frameRateSection
                     cameraSelectionSection
+                    frameRateSection
                     directorySelectionSection
                     displaySection
-
                     aboutSection
                     Spacer(minLength: 100)
                 }
@@ -215,10 +214,11 @@ struct SettingsView: View {
                                     .padding()
                 } else {
                     if !backCameras.isEmpty {
-                        Text("BACK")
+                        Text("BACK CAMERA")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 10)
                         
                         LazyVGrid(
                             columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
@@ -232,11 +232,12 @@ struct SettingsView: View {
                     
                     // Front cameras grid
                     if !frontCameras.isEmpty {
-                        Text("FRONT")
+                        Text("FRONT CAMERA")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 16)
+                            .padding(.bottom, 10)
                         
                         LazyVGrid(
                             columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
@@ -255,7 +256,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.vertical, 20)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
             .overlay(
                 RoundedRectangle(cornerRadius: 20)

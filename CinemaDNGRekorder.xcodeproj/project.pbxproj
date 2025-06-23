@@ -274,6 +274,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app uses the camera to capture photos and videos.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app uses the microphone to capture audio.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "This app uses the camera to capture photos and videos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -317,6 +318,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app uses the camera to capture photos and videos.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app uses the microphone to capture audio.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "This app uses the camera to capture photos and videos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
