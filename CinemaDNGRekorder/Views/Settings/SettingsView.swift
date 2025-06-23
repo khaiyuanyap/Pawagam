@@ -284,15 +284,15 @@ struct SettingsView: View {
                     .foregroundColor(cameraManager.selectedCameraID == camera.id ? .black : .white)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .background(
                 cameraManager.selectedCameraID == camera.id
                     ? Color.white
                     : Color.white.opacity(0.2)
             )
-            .cornerRadius(12)
+            .cornerRadius(8)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 8)
                     .stroke(.white.opacity(0.3), lineWidth: 1)
             )
         }

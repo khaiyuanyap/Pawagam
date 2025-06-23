@@ -66,7 +66,7 @@ extension UserDefaults {
 }
 
 // Global variable to control printing
-var isPrintingEnabled = true
+var isPrintingEnabled = false
 
 // Override the standard print function
 func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
