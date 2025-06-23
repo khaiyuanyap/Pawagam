@@ -23,48 +23,6 @@ func formatTimeInterval(_ interval: TimeInterval) -> String {
     return String(format: "%02d:%02d", minutes, seconds)
 }
 
-// User Preferences Keys
-struct UserPreferences {
-    static let showGridKey = "showGrid"
-    static let showHistogramKey = "showHistogram"
-    static let targetFPSKey = "targetFPS"
-    static let isoKey = "iso"
-    static let shutterAngleKey = "shutterAngle"
-    static let directoryBookmarkKey = "captureDirectoryBookmark"
-    static let selectedCameraIDKey = "selectedCameraID"
-}
-
-// UserDefaults Extension
-extension UserDefaults {
-    func bool(forKey key: String, defaultValue: Bool) -> Bool {
-        if let value = self.value(forKey: key) as? Bool {
-            return value
-        }
-        return defaultValue
-    }
-    
-    func integer(forKey key: String, defaultValue: Int) -> Int {
-        if let value = self.value(forKey: key) as? Int {
-            return value
-        }
-        return defaultValue
-    }
-    
-    func float(forKey key: String, defaultValue: Float) -> Float {
-        if let value = self.value(forKey: key) as? Float {
-            return value
-        }
-        return defaultValue
-    }
-    
-    func double(forKey key: String, defaultValue: Double) -> Double {
-        if let value = self.value(forKey: key) as? Double {
-            return value
-        }
-        return defaultValue
-    }
-}
-
 // Global variable to control printing
 var isPrintingEnabled = false
 
@@ -88,36 +46,6 @@ struct DNGCameraApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-        }
-    }
-}
-
-// URL Bookmark Extension
-extension URL {
-    func bookmarkData() -> Data? {
-        do {
-            return try self.bookmarkData(
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-        } catch {
-            print("Error creating bookmark: \(error.localizedDescription)")
-            return nil
-        }
-    }
-    
-    static func fromBookmarkData(_ data: Data) -> URL? {
-        var isStale = false
-        do {
-            let url = try URL(
-                resolvingBookmarkData: data,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-            return isStale ? nil : url
-        } catch {
-            print("Error resolving bookmark: \(error.localizedDescription)")
-            return nil
         }
     }
 }
