@@ -18,58 +18,8 @@ import MetalPerformanceShaders
 
 /// Content View
 struct ContentView: View {
-    // Standard Increments
-    let standardISOs: [Double] = [
-        24, 25, 50, 54, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800,
-        1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000,
-        10000, 12800, 16000, 20000, 25600, 32000, 40000, 51200,
-    ]
-
-    let standardShutterAngles: [Double] = [
-        1, 2, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360,
-    ]
-
-    private func roundToIncrement(_ value: Double, increments: [Double]) -> Double {
-        guard !increments.isEmpty else { return value }
-        let clampedValue = min(max(value, Double(cameraManager.minISO)), Double(cameraManager.maxISO))
-        let first = increments[0]
-        let last = increments[increments.count - 1]
-
-        // Handle values outside the increments range
-        if value <= first { return first }
-        if value >= last { return last }
-
-        // Binary search for the first element >= value
-        var low = 0
-        var high = increments.count - 1
-        var index = increments.count  // Default if not found (shouldn't happen due to bounds)
-
-        while low <= high {
-            let mid = (low + high) / 2
-            if increments[mid] < value {
-                low = mid + 1
-            } else {
-                index = mid
-                high = mid - 1
-            }
-        }
-
-        // Compare adjacent candidates for the closest increment
-        let candidate1 = increments[index - 1]
-        let candidate2 = increments[index]
-        let diff1 = value - candidate1
-        let diff2 = candidate2 - value
-
-        return diff1 <= diff2 ? candidate1 : candidate2
-    }
-
-    @StateObject private var cameraManager = CameraManager()
-    @State private var showSettings = false
+    @StateObject private var viewModel = ContentViewModel()
     @State private var captureButtonScale: CGFloat = 1.0
-    
-    // New state for exposure controls
-    @State private var showISOPopup = false
-    @State private var showShutterPopup = false
 
     var body: some View {
         ZStack {
@@ -81,24 +31,24 @@ struct ContentView: View {
             // Camera Preview with Grid
             ZStack {
                 CameraPreview(
-                    session: cameraManager.captureSession,
-                    focusAction: cameraManager.setFocusPoint
+                    session: viewModel.cameraManager.captureSession,
+                    focusAction: viewModel.cameraManager.setFocusPoint
                 )
                 .ignoresSafeArea()
                 .background(.clear)
 
                 // Grid Overlay
-                if cameraManager.showGrid {
+                if viewModel.cameraManager.showGrid {
                     GridOverlay()
                 }
             }
 
             // Histogram
-            if cameraManager.showHistogram {
+            if viewModel.cameraManager.showHistogram {
                 VStack {
                     HStack {
                         Spacer()
-                        HistogramView(cameraManager: cameraManager)
+                        HistogramView(cameraManager: viewModel.cameraManager)
                             .padding(.top, 60)
                             .padding(.trailing, 20)
                     }
@@ -121,28 +71,28 @@ struct ContentView: View {
             exposurePopups
             
             // Modern Capture Complete Popup
-            if cameraManager.showCaptureComplete {
+            if viewModel.cameraManager.showCaptureComplete {
                 modernCaptureCompletePopup
             }
         }
-        .fullScreenCover(isPresented: $showSettings) {
+        .fullScreenCover(isPresented: $viewModel.showSettings) {
             SettingsView(
-                cameraManager: cameraManager,
-                standardISOs: standardISOs,
-                standardShutterAngles: standardShutterAngles,
-                roundToIncrement: roundToIncrement
+                cameraManager: viewModel.cameraManager,
+                standardISOs: viewModel.standardISOs,
+                standardShutterAngles: viewModel.standardShutterAngles,
+                roundToIncrement: viewModel.roundToIncrement
             )
         }
-        .alert("Error", isPresented: $cameraManager.showAlert) {
-            Button("OK") { cameraManager.acknowledgeError() }
+        .alert("Error", isPresented: $viewModel.cameraManager.showAlert) {
+            Button("OK") { viewModel.cameraManager.acknowledgeError() }
         } message: {
-            Text(cameraManager.alertMessage)
+            Text(viewModel.cameraManager.alertMessage)
         }
         .onAppear {
-            cameraManager.requestPermissions()
+            viewModel.cameraManager.requestPermissions()
             // Lock exposure when view appears
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                cameraManager.lockExposure()
+                viewModel.cameraManager.lockExposure()
             }
         }
     }
@@ -151,13 +101,13 @@ struct ContentView: View {
     private var exposurePopups: some View {
         ZStack(alignment: .bottom) {
             // Dismissal background
-            if showISOPopup || showShutterPopup {
+            if viewModel.showISOPopup || viewModel.showShutterPopup {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
                         withAnimation(.spring()) {
-                            showISOPopup = false
-                            showShutterPopup = false
+                            viewModel.showISOPopup = false
+                            viewModel.showShutterPopup = false
                         }
                     }
             }
@@ -166,23 +116,23 @@ struct ContentView: View {
                 Spacer()
                 
                 // ISO Popup
-                if showISOPopup {
+                if viewModel.showISOPopup {
                     ExposureControl(
                         icon: "circle.bottomrighthalf.pattern.checkered",
                         title: "ISO",
                         value: Binding<Double>(
-                            get: { Double(cameraManager.iso) },
+                            get: { Double(viewModel.cameraManager.iso) },
                             set: {
-                                let clampedValue = min(max($0, Double(cameraManager.minISO)), Double(cameraManager.maxISO))
-                                cameraManager.iso = Float(clampedValue)
+                                let clampedValue = min(max($0, Double(viewModel.cameraManager.minISO)), Double(viewModel.cameraManager.maxISO))
+                                viewModel.cameraManager.iso = Float(clampedValue)
                             }
                         ),
-                        range: Double(cameraManager.minISO)...Double(cameraManager.maxISO),
-                        increments: standardISOs.filter {
-                            $0 >= Double(cameraManager.minISO) && $0 <= Double(cameraManager.maxISO)
+                        range: Double(viewModel.cameraManager.minISO)...Double(viewModel.cameraManager.maxISO),
+                        increments: viewModel.standardISOs.filter {
+                            $0 >= Double(viewModel.cameraManager.minISO) && $0 <= Double(viewModel.cameraManager.maxISO)
                         },
-                        displayValue: "\(Int(cameraManager.iso))",
-                        roundToIncrement: roundToIncrement
+                        displayValue: "\(Int(viewModel.cameraManager.iso))",
+                        roundToIncrement: viewModel.roundToIncrement
                     )
                     .padding()
                     .padding(.horizontal)
@@ -191,15 +141,15 @@ struct ContentView: View {
                 }
                 
                 // Shutter Popup
-                if showShutterPopup {
+                if viewModel.showShutterPopup {
                     ExposureControl(
                         icon: "righttriangle",
                         title: "Shutter Angle",
-                        value: $cameraManager.shutterAngle,
+                        value: $viewModel.cameraManager.shutterAngle,
                         range: 1...360,
-                        increments: standardShutterAngles,
-                        displayValue: "\(Int(cameraManager.shutterAngle))°",
-                        roundToIncrement: roundToIncrement
+                        increments: viewModel.standardShutterAngles,
+                        displayValue: "\(Int(viewModel.cameraManager.shutterAngle))°",
+                        roundToIncrement: viewModel.roundToIncrement
                     )
                     .padding()
                     .padding(.horizontal)
@@ -218,7 +168,7 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        cameraManager.showCaptureComplete = false
+                        viewModel.cameraManager.showCaptureComplete = false
                     }
                 }
             
@@ -236,8 +186,8 @@ struct ContentView: View {
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(.white)
                     }
-                    .scaleEffect(cameraManager.showCaptureComplete ? 1.0 : 0.8)
-                    .animation(.spring(response: 0.6, dampingFraction: 0.8), value: cameraManager.showCaptureComplete)
+                    .scaleEffect(viewModel.cameraManager.showCaptureComplete ? 1.0 : 0.8)
+                    .animation(.spring(response: 0.6, dampingFraction: 0.8), value: viewModel.cameraManager.showCaptureComplete)
                     
                     Text("Capture Complete")
                         .font(.headline)
@@ -259,7 +209,7 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                             .frame(width: 16)
                         
-                        Text("\(cameraManager.captureCount) cDNG frames saved")
+                        Text("\(viewModel.cameraManager.captureCount) cDNG frames saved")
                             .font(.subheadline)
                             .fontWeight(.medium)
                         
@@ -267,7 +217,7 @@ struct ContentView: View {
                     }
                     
                     // Location info
-                    if let directory = cameraManager.captureDirectory?.lastPathComponent {
+                    if let directory = viewModel.cameraManager.captureDirectory?.lastPathComponent {
                         HStack(spacing: 10) {
                             Image(systemName: "folder")
                                 .font(.system(size: 16))
@@ -285,14 +235,14 @@ struct ContentView: View {
                     
                     // Error status
                     HStack(spacing: 10) {
-                        Image(systemName: cameraManager.errorCount > 0 ? "exclamationmark.triangle" : "checkmark")
+                        Image(systemName: viewModel.cameraManager.errorCount > 0 ? "exclamationmark.triangle" : "checkmark")
                             .font(.system(size: 16))
-                            .foregroundColor(cameraManager.errorCount > 0 ? .primary : .secondary)
+                            .foregroundColor(viewModel.cameraManager.errorCount > 0 ? .primary : .secondary)
                             .frame(width: 16)
                         
-                        Text(cameraManager.errorCount > 0 ? "\(cameraManager.errorCount) dropped frames" : "No errors")
+                        Text(viewModel.cameraManager.errorCount > 0 ? "\(viewModel.cameraManager.errorCount) dropped frames" : "No errors")
                             .font(.subheadline)
-                            .foregroundColor(cameraManager.errorCount > 0 ? .primary : .secondary)
+                            .foregroundColor(viewModel.cameraManager.errorCount > 0 ? .primary : .secondary)
                         
                         Spacer()
                     }
@@ -305,7 +255,7 @@ struct ContentView: View {
                     // Secondary action button
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            cameraManager.showCaptureComplete = false
+                            viewModel.cameraManager.showCaptureComplete = false
                         }
                     }) {
                         Text("Done")
@@ -323,9 +273,9 @@ struct ContentView: View {
                     
                     // Primary action button
                     Button(action: {
-                        cameraManager.openFilesApp()
+                        viewModel.cameraManager.openFilesApp()
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            cameraManager.showCaptureComplete = false
+                            viewModel.cameraManager.showCaptureComplete = false
                         }
                     }) {
                         HStack(spacing: 4) {
@@ -355,9 +305,9 @@ struct ContentView: View {
                     .stroke(.quaternary, lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 6)
-            .scaleEffect(cameraManager.showCaptureComplete ? 1.0 : 0.9)
-            .opacity(cameraManager.showCaptureComplete ? 1.0 : 0)
-            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: cameraManager.showCaptureComplete)
+            .scaleEffect(viewModel.cameraManager.showCaptureComplete ? 1.0 : 0.9)
+            .opacity(viewModel.cameraManager.showCaptureComplete ? 1.0 : 0)
+            .animation(.spring(response: 0.6, dampingFraction: 0.8), value: viewModel.cameraManager.showCaptureComplete)
         }
     }
 
@@ -366,7 +316,7 @@ struct ContentView: View {
         HStack {
             // Settings Toggle Button
             Button(action: {
-                showSettings = true
+                viewModel.showSettings = true
             }) {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 18, weight: .medium))
@@ -387,11 +337,11 @@ struct ContentView: View {
             captureCounterView
             
             // Dropped Frames Indicator
-            if cameraManager.errorCount > 0 {
+            if viewModel.cameraManager.errorCount > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 14, weight: .bold))
-                    Text("\(cameraManager.errorCount)")
+                    Text("\(viewModel.cameraManager.errorCount)")
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
                 }
                 .foregroundStyle(.white)
@@ -409,7 +359,7 @@ struct ContentView: View {
 
             // Focus Lock Indicator
             Group {
-                if cameraManager.isFocusLocked {
+                if viewModel.cameraManager.isFocusLocked {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.yellow)
@@ -431,7 +381,7 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "photo.stack")
                 .font(.system(size: 14, weight: .medium))
-            Text("\(cameraManager.captureCount)")
+            Text("\(viewModel.cameraManager.captureCount)")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
         }
         .foregroundStyle(.white)
@@ -445,7 +395,7 @@ struct ContentView: View {
     }
 
     private var statusColor: Color {
-        switch cameraManager.statusText.lowercased() {
+        switch viewModel.cameraManager.statusText.lowercased() {
         case let status where status.contains("ready"):
             return .green
         case let status where status.contains("error"):
@@ -461,7 +411,7 @@ struct ContentView: View {
     private var bottomControls: some View {
         VStack(spacing: 20) {
             // Recording Status Indicator
-            if cameraManager.isCapturing || cameraManager.isFinishing {
+            if viewModel.cameraManager.isCapturing || viewModel.cameraManager.isFinishing {
                 recordingIndicator
                     .transition(
                         .scale.combined(with: .opacity).animation(
@@ -473,11 +423,11 @@ struct ContentView: View {
                 // ISO Button
                 exposureControlButton(
                     icon: "circle.bottomrighthalf.pattern.checkered",
-                    isActive: showISOPopup,
+                    isActive: viewModel.showISOPopup,
                     action: {
                         withAnimation(.spring()) {
-                            showShutterPopup = false
-                            showISOPopup.toggle()
+                            viewModel.showShutterPopup = false
+                            viewModel.showISOPopup.toggle()
                         }
                     }
                 )
@@ -488,11 +438,11 @@ struct ContentView: View {
                 // Shutter Button
                 exposureControlButton(
                     icon: "righttriangle",
-                    isActive: showShutterPopup,
+                    isActive: viewModel.showShutterPopup,
                     action: {
                         withAnimation(.spring()) {
-                            showISOPopup = false
-                            showShutterPopup.toggle()
+                            viewModel.showISOPopup = false
+                            viewModel.showShutterPopup.toggle()
                         }
                     }
                 )
@@ -526,14 +476,14 @@ struct ContentView: View {
             Circle()
                 .fill(.red)
                 .frame(width: 8, height: 8)
-                .scaleEffect(cameraManager.isCapturing ? 1.2 : 0.8)
-                .opacity(cameraManager.isCapturing ? 1.0 : 0.6)
+                .scaleEffect(viewModel.cameraManager.isCapturing ? 1.2 : 0.8)
+                .opacity(viewModel.cameraManager.isCapturing ? 1.0 : 0.6)
                 .animation(
                     .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
-                    value: cameraManager.isCapturing
+                    value: viewModel.cameraManager.isCapturing
                 )
 
-            Text(cameraManager.isFinishing ? "Finalizing..." : "Recording")
+            Text(viewModel.cameraManager.isFinishing ? "Finalizing..." : "Recording")
                 .font(.system(size: 14, weight: .medium, design: .rounded))
                 .foregroundStyle(.white)
         }
@@ -573,15 +523,15 @@ struct ContentView: View {
                 Image(systemName: buttonIcon)
                     .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(buttonIconColor)
-                    .scaleEffect(cameraManager.isCapturing ? 0.9 : 1.0)
+                    .scaleEffect(viewModel.cameraManager.isCapturing ? 0.9 : 1.0)
                     .animation(
-                        .smooth(duration: 0.2), value: cameraManager.isCapturing
+                        .smooth(duration: 0.2), value: viewModel.cameraManager.isCapturing
                     )
             }
         }
         .scaleEffect(captureButtonScale)
-        .disabled(cameraManager.isFinishing)
-        .opacity(cameraManager.isFinishing ? 0.6 : 1.0)
+        .disabled(viewModel.cameraManager.isFinishing)
+        .opacity(viewModel.cameraManager.isFinishing ? 0.6 : 1.0)
         .buttonStyle(CaptureButtonStyle())
         .sensoryFeedback(.impact(weight: .medium), trigger: captureButtonScale)
         { _, newValue in
@@ -590,9 +540,9 @@ struct ContentView: View {
     }
 
     private var buttonAccentColor: Color {
-        if cameraManager.isFinishing {
+        if viewModel.cameraManager.isFinishing {
             return .gray
-        } else if cameraManager.isCapturing {
+        } else if viewModel.cameraManager.isCapturing {
             return .red
         } else {
             return .white
@@ -600,9 +550,9 @@ struct ContentView: View {
     }
 
     private var buttonIconColor: Color {
-        if cameraManager.isFinishing {
+        if viewModel.cameraManager.isFinishing {
             return .gray
-        } else if cameraManager.isCapturing {
+        } else if viewModel.cameraManager.isCapturing {
             return .red
         } else {
             return .white
@@ -610,9 +560,9 @@ struct ContentView: View {
     }
 
     private var buttonIcon: String {
-        if cameraManager.isFinishing {
+        if viewModel.cameraManager.isFinishing {
             return "hourglass"
-        } else if cameraManager.isCapturing {
+        } else if viewModel.cameraManager.isCapturing {
             return "stop.fill"
         } else {
             return "camera.fill"
@@ -633,9 +583,9 @@ struct ContentView: View {
     }
 
     private var statusTextValue: String {
-        if cameraManager.isFinishing {
+        if viewModel.cameraManager.isFinishing {
             return "Finishing..."
-        } else if cameraManager.isCapturing {
+        } else if viewModel.cameraManager.isCapturing {
             return "Recording..."
         } else {
             return "Tap to Record"
@@ -643,10 +593,10 @@ struct ContentView: View {
     }
 
     private func captureButtonAction() {
-        if cameraManager.isCapturing {
-            cameraManager.stopCapture()
-        } else if !cameraManager.isFinishing {
-            cameraManager.startCapture()
+        if viewModel.cameraManager.isCapturing {
+            viewModel.cameraManager.stopCapture()
+        } else if !viewModel.cameraManager.isFinishing {
+            viewModel.cameraManager.startCapture()
         }
     }
     
