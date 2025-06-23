@@ -218,7 +218,7 @@ struct SettingsView: View {
                             .font(.system(size: 16, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.bottom, 10)
+                            .padding(.bottom, 6)
                         
                         LazyVGrid(
                             columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
@@ -237,7 +237,7 @@ struct SettingsView: View {
                             .foregroundColor(.white.opacity(0.6))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 16)
-                            .padding(.bottom, 10)
+                            .padding(.bottom, 6)
                         
                         LazyVGrid(
                             columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
