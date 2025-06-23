@@ -155,8 +155,8 @@ class CameraManager: NSObject, ObservableObject {
     var metricsTimer: Timer?
     var captureStartTime: Date?
     // Increased buffer size
-    let maxBufferSize = 500000  // Up from 100
-    let maxMemoryFrames = 100000  // Keep only recent frames in memory
+    let maxBufferSize = 50  // Up from 100
+    let maxMemoryFrames = 100 // Keep only recent frames in memory
 
     // New buffer management properties
     var frameDataCache = [Int: Data]()

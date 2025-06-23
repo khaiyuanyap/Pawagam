@@ -24,7 +24,7 @@ func formatTimeInterval(_ interval: TimeInterval) -> String {
 }
 
 // Global variable to control printing
-var isPrintingEnabled = false
+var isPrintingEnabled = true
 
 // Override the standard print function
 func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
