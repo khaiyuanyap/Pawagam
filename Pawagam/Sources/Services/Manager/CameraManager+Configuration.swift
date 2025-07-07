@@ -249,6 +249,9 @@ extension CameraManager {
 
         captureSession.sessionPreset = .photo
         
+        // Set continuous autofocus by default
+        setContinuousAutofocus()
+        
         if selectedCameraID.isEmpty,
            let backWideCamera = availableCameras.first(where: {
                $0.position == .back && $0.type == "Wide"

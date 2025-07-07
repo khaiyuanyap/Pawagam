@@ -58,7 +58,7 @@ struct AboutView: View {
         HStack(spacing: 11) {
                         Text("Pawagam")
                     }
-                    .font(.system(size: 28, design: .monospaced))
+                    .font(.system(size: 40, design: .monospaced))
                     .foregroundStyle(.white)
                 
                 Text("Raw Video Recording")

@@ -20,7 +20,6 @@ import MetalPerformanceShaders
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
         var focusAction: ((CGPoint) -> Void)?
-        var screenPointAction: ((CGPoint) -> Void)?
         
         func makeUIView(context: Context) -> UIView {
             let view = UIView(frame: UIScreen.main.bounds)
@@ -35,6 +34,11 @@ struct CameraPreview: UIViewRepresentable {
             let tapGesture = UITapGestureRecognizer(
                 target: context.coordinator,
                 action: #selector(Coordinator.handleTap(_:)))
+            tapGesture.numberOfTapsRequired = 1
+            tapGesture.numberOfTouchesRequired = 1
+            tapGesture.cancelsTouchesInView = false
+            tapGesture.delaysTouchesBegan = false
+            tapGesture.delaysTouchesEnded = false
             view.addGestureRecognizer(tapGesture)
             
             return view
@@ -68,7 +72,6 @@ struct CameraPreview: UIViewRepresentable {
             let devicePoint = previewLayer.captureDevicePointConverted(
                 fromLayerPoint: tapPoint)
             parent.focusAction?(devicePoint)
-            parent.screenPointAction?(tapPoint)
         }
     }
 }

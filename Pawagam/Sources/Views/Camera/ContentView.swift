@@ -32,8 +32,7 @@ struct ContentView: View {
             ZStack {
                 CameraPreview(
                     session: viewModel.cameraManager.captureSession,
-                    focusAction: viewModel.cameraManager.setFocusPoint,
-                    screenPointAction: viewModel.cameraManager.setScreenFocusPoint
+                    focusAction: viewModel.cameraManager.setFocusPoint
                 )
                 .ignoresSafeArea()
                 .background(.clear)
@@ -43,10 +42,6 @@ struct ContentView: View {
                     GridOverlay()
                 }
                 
-                // Focus Point Overlay
-                if let focusPoint = viewModel.cameraManager.focusPoint {
-                    FocusOverlay(focusPoint: focusPoint)
-                }
             }
 
             // Histogram
@@ -100,6 +95,12 @@ struct ContentView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 viewModel.cameraManager.lockExposure()
             }
+            // Prevent screen dimming
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            // Re-enable screen dimming when app goes away
+            UIApplication.shared.isIdleTimerDisabled = false
         }
     }
     
@@ -740,25 +741,3 @@ struct CaptureButtonStyle: ButtonStyle {
     }
 }
 
-struct FocusOverlay: View {
-    let focusPoint: CGPoint
-    @State private var opacity: Double = 0.0
-    
-    var body: some View {
-        Rectangle()
-            .stroke(Color.yellow, lineWidth: 2)
-            .frame(width: 80, height: 80)
-            .position(focusPoint)
-            .opacity(opacity)
-            .onAppear {
-                withAnimation(.easeIn(duration: 0.2)) {
-                    opacity = 1.0
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        opacity = 0.0
-                    }
-                }
-            }
-    }
-}

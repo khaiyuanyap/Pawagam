@@ -71,19 +71,10 @@ extension CameraManager {
     }
     
     func setFocusPoint(_ point: CGPoint) {
-        // Add this guard condition to ignore focus changes during capture
+        // Preserve focus lock during capture
         guard !isCapturing else { return }
 
         guard let device = captureDevice else { return }
-
-        // Clear any existing focus point display
-        focusPoint = nil
-        focusPointTimer?.invalidate()
-        focusPointTimer = Timer.scheduledTimer(
-            withTimeInterval: 2.0, repeats: false
-        ) { [weak self] _ in
-            self?.focusPoint = nil
-        }
 
         deviceConfigurationQueue.async {
             do {
@@ -114,7 +105,10 @@ extension CameraManager {
         focusTimer = Timer.scheduledTimer(
             withTimeInterval: focusDuration, repeats: false
         ) { [weak self] _ in
-            self?.resetToContinuousFocus()
+            // Don't reset to continuous focus if currently capturing
+            if let self = self, !self.isCapturing {
+                self.setContinuousAutofocus()
+            }
         }
     }
 
@@ -140,6 +134,28 @@ extension CameraManager {
     }
     
     func setScreenFocusPoint(_ point: CGPoint) {
-        focusPoint = point
+        // No longer needed since we removed the focus indicator
+    }
+    
+    func setContinuousAutofocus() {
+        guard let device = captureDevice else { return }
+        
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
+                
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                    DispatchQueue.main.async { [weak self] in
+                        self?.isFocusLocked = false
+                    }
+                    print("Set to continuous autofocus")
+                }
+                
+                device.unlockForConfiguration()
+            } catch {
+                print("Error setting continuous autofocus: \(error.localizedDescription)")
+            }
+        }
     }
 } 

@@ -23,21 +23,6 @@ func formatTimeInterval(_ interval: TimeInterval) -> String {
     return String(format: "%02d:%02d", minutes, seconds)
 }
 
-// Global variable to control printing
-var isPrintingEnabled = true
-
-// Override the standard print function
-func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
-    guard isPrintingEnabled else { return }
-    
-    // Reconstruct the output string
-    let output = items.map { "\($0)" }.joined(separator: separator)
-    
-    // Call the original print function from Swift standard library
-    Swift.print(output, terminator: terminator)
-}
-
-
 // Main App
 @main
 struct DNGCameraApp: App {

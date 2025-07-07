@@ -4,21 +4,100 @@ extension CameraManager {
     
     // MARK: - Audio Handling
     
-    // NEW: Configures the shared audio session for recording.
+    // NEW: Configures the shared audio session for stereo recording.
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            // Use .videoRecording mode to optimize microphone selection and processing.
+            // Use .playAndRecord category for stereo recording
             try session.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker, .allowBluetooth])
             
             // Use the user's preferred sample rate
             try session.setPreferredSampleRate(self.preferredAudioSampleRate)
             
             try session.setActive(true)
-            print("AVAudioSession configured for high-quality recording.")
+            
+            // Configure stereo recording
+            configureStereoRecording()
+            
+            print("AVAudioSession configured for stereo recording.")
         } catch {
             print("Failed to configure AVAudioSession: \(error)")
-            // Optionally show an error to the user.
+        }
+    }
+    
+    // Configure stereo audio recording
+    func configureStereoRecording() {
+        let session = AVAudioSession.sharedInstance()
+        
+        // Find and enable built-in microphone
+        enableBuiltInMic()
+        
+        // Configure stereo directionality
+        configureMicrophoneDirectionality()
+    }
+    
+    private func enableBuiltInMic() {
+        let session = AVAudioSession.sharedInstance()
+        
+        // Find the built-in microphone input
+        guard let availableInputs = session.availableInputs,
+              let builtInMicInput = availableInputs.first(where: { $0.portType == .builtInMic }) else {
+            print("The device must have a built-in microphone.")
+            return
+        }
+        
+        // Make the built-in microphone input the preferred input
+        do {
+            try session.setPreferredInput(builtInMicInput)
+            print("Built-in microphone set as preferred input.")
+        } catch {
+            print("Unable to set the built-in mic as the preferred input: \(error)")
+        }
+    }
+    
+    private func configureMicrophoneDirectionality() {
+        let session = AVAudioSession.sharedInstance()
+        
+        // Initialize stereo support to false
+        self.isStereoSupported = false
+        
+        guard let preferredInput = session.preferredInput,
+              let dataSources = preferredInput.dataSources else {
+            print("No data sources available for preferred input.")
+            return
+        }
+        
+        // Try to find a data source that supports stereo
+        for dataSource in dataSources {
+            guard let supportedPolarPatterns = dataSource.supportedPolarPatterns else { continue }
+            
+            do {
+                if supportedPolarPatterns.contains(.stereo) {
+                    // Set the preferred polar pattern to stereo
+                    try dataSource.setPreferredPolarPattern(.stereo)
+                    
+                    // Set this as the preferred data source
+                    try preferredInput.setPreferredDataSource(dataSource)
+                    
+                    // Set input orientation to match device orientation
+                    try session.setPreferredInputOrientation(.landscapeLeft)
+                    
+                    // Mark stereo as supported
+                    self.isStereoSupported = true
+                    
+                    print("Stereo recording configured with data source: \(dataSource.dataSourceName)")
+                    return
+                } else {
+                    // Fall back to omnidirectional for better audio quality
+                    if supportedPolarPatterns.contains(.omnidirectional) {
+                        try dataSource.setPreferredPolarPattern(.omnidirectional)
+                        try preferredInput.setPreferredDataSource(dataSource)
+                        print("Omnidirectional recording configured with data source: \(dataSource.dataSourceName)")
+                    }
+                }
+            } catch {
+                print("Error configuring data source \(dataSource.dataSourceName): \(error)")
+            }
         }
     }
     
@@ -29,15 +108,20 @@ extension CameraManager {
             return
         }
         
-        // Update sample rate and channel count based on user preferences
+        // Update sample rate and channel count based on user preferences and stereo support
         let session = AVAudioSession.sharedInstance()
         
         // Use preferred settings if available, fallback to hardware capabilities
         self.audioSampleRate = self.preferredAudioSampleRate
-        self.audioChannelCount = min(self.preferredAudioChannels, Int(session.inputNumberOfChannels))
-        if self.audioChannelCount == 0 { self.audioChannelCount = 1 } // Failsafe for mono
-
-        print("Audio hardware configuration: \(audioSampleRate) Hz, \(audioChannelCount) channels.")
+        
+        // Use the stereo support flag that was set during audio session configuration
+        if isStereoSupported && preferredAudioChannels == 2 {
+            self.audioChannelCount = 2 // Use stereo
+        } else {
+            self.audioChannelCount = 1 // Fall back to mono
+        }
+        
+        print("Audio configuration: \(audioSampleRate) Hz, \(audioChannelCount) channels, stereo supported: \(isStereoSupported)")
 
         do {
             let input = try AVCaptureDeviceInput(device: audioDevice)
@@ -54,6 +138,7 @@ extension CameraManager {
             print("Could not create audio device input: \(error)")
         }
     }
+    
     
     // MODIFIED: Configures the writer for uncompressed LPCM in a .wav container.
     func setupAudioWriter() {

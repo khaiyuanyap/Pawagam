@@ -148,6 +148,7 @@ class CameraManager: NSObject, ObservableObject {
     // --- NEW: Properties for high-quality audio ---
     var audioSampleRate: Double = 48000.0 // Default to high quality
     var audioChannelCount: Int = 2        // Default to stereo
+    var isStereoSupported: Bool = false   // Track if device supports stereo recording
     // --- END: Audio Recording Properties ---
 
     // Histogram publisher
@@ -164,9 +165,6 @@ class CameraManager: NSObject, ObservableObject {
     @Published var maxISO: Float = 0.0
     var cancellables = Set<AnyCancellable>()
 
-    // Add focus point visualization
-    @Published var focusPoint: CGPoint? = nil
-    var focusPointTimer: Timer?
 
     @Published var elapsedTime: TimeInterval = 0
 
@@ -297,7 +295,6 @@ class CameraManager: NSObject, ObservableObject {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        focusPointTimer?.invalidate()
     }
     
     // Permissions
