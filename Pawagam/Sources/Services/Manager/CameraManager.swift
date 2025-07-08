@@ -153,6 +153,21 @@ class CameraManager: NSObject, ObservableObject {
 
     // Histogram publisher
     @Published var histogramPublisher = PassthroughSubject<[CGFloat], Never>()
+    
+    
+    // Histogram display options
+    @Published var histogramMode: HistogramMode = .luminance {
+        didSet { savePreferences() }
+    }
+    
+    enum HistogramMode: String, CaseIterable {
+        case luminance = "Luminance"
+        case rgb = "RGB"
+        case red = "Red"
+        case green = "Green"
+        case blue = "Blue"
+    }
+    
 
     @Published var isFocusLocked = false
 

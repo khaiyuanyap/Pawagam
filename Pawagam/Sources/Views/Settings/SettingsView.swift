@@ -490,6 +490,63 @@ struct SettingsView: View {
                     subtitle: "Real-time exposure analysis",
                     isOn: $cameraManager.showHistogram
                 )
+                
+                // Histogram Mode Selection (only show when histogram is enabled)
+                if cameraManager.showHistogram {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(spacing: 16) {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.8))
+                                .frame(width: 24, height: 24)
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Histogram Mode")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(.white)
+                                
+                                Text("Color channel analysis")
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(.white.opacity(0.6))
+                            }
+                            
+                            Spacer()
+                        }
+                        
+                        LazyVGrid(
+                            columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
+                            spacing: 8
+                        ) {
+                            ForEach(CameraManager.HistogramMode.allCases, id: \.self) { mode in
+                                Button(action: { cameraManager.histogramMode = mode }) {
+                                    Text(mode.rawValue)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(
+                                            cameraManager.histogramMode == mode ? .black : .white
+                                        )
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(
+                                            cameraManager.histogramMode == mode ? Color.white : Color.white.opacity(0.2)
+                                        )
+                                        .cornerRadius(6)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                        )
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(.white.opacity(0.1), lineWidth: 1)
+                    )
+                }
+                
             }
         }
     }

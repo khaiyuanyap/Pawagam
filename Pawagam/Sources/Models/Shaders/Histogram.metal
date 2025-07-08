@@ -25,3 +25,4 @@ kernel void luminanceHistogram(
         atomic_fetch_add_explicit(&histogram[binIndex], 1, memory_order_relaxed);
     }
 }
+

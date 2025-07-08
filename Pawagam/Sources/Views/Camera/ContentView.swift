@@ -44,18 +44,22 @@ struct ContentView: View {
                 
             }
 
-            // Histogram
-            if viewModel.cameraManager.showHistogram {
-                VStack {
-                    HStack {
-                        Spacer()
-                        HistogramView(cameraManager: viewModel.cameraManager)
-                            .padding(.top, 60)
-                            .padding(.trailing, 20)
-                    }
+            // Histogram (right side)
+            VStack {
+                HStack {
                     Spacer()
+                    VStack(alignment: .trailing, spacing: 12) {
+                        // Histogram
+                        if viewModel.cameraManager.showHistogram {
+                            HistogramView(cameraManager: viewModel.cameraManager)
+                        }
+                    }
+                    .padding(.top, 60)
+                    .padding(.trailing, 20)
                 }
+                Spacer()
             }
+            
 
             // UI Overlay
             VStack(spacing: 0) {

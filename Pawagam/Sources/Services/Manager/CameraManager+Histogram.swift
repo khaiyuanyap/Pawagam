@@ -50,6 +50,21 @@ extension CameraManager {
         }
         defer { histogramSemaphore.signal() }
         
+        switch histogramMode {
+        case .luminance:
+            return calculateLuminanceHistogram(from: pixelBuffer)
+        case .rgb:
+            return calculateRGBHistogram(from: pixelBuffer)
+        case .red:
+            return calculateChannelHistogram(from: pixelBuffer, channel: 0)
+        case .green:
+            return calculateChannelHistogram(from: pixelBuffer, channel: 1)
+        case .blue:
+            return calculateChannelHistogram(from: pixelBuffer, channel: 2)
+        }
+    }
+    
+    private func calculateLuminanceHistogram(from pixelBuffer: CVPixelBuffer) -> [CGFloat] {
         // Reset histogram buffer
         let bufferPtr = histogramBuffer.contents().bindMemory(to: UInt32.self, capacity: 256)
         memset(bufferPtr, 0, 256 * MemoryLayout<UInt32>.size)
@@ -90,6 +105,71 @@ extension CameraManager {
         }
         
         return bins.map { $0 / CGFloat(maxValue) }
+    }
+    
+    private func calculateRGBHistogram(from pixelBuffer: CVPixelBuffer) -> [CGFloat] {
+        // For RGB mode, interleave R, G, B values in groups of 3
+        let redBins = calculateChannelHistogram(from: pixelBuffer, channel: 0)
+        let greenBins = calculateChannelHistogram(from: pixelBuffer, channel: 1)
+        let blueBins = calculateChannelHistogram(from: pixelBuffer, channel: 2)
+        
+        // Interleave the channels for RGB display (simplified to 21 bins per channel)
+        var rgbBins: [CGFloat] = []
+        let binsPerChannel = 21
+        
+        for i in 0..<binsPerChannel {
+            let index = i * 64 / binsPerChannel
+            rgbBins.append(redBins[min(index, redBins.count - 1)])
+            rgbBins.append(greenBins[min(index, greenBins.count - 1)])
+            rgbBins.append(blueBins[min(index, blueBins.count - 1)])
+        }
+        
+        // Pad to 64 bins if needed
+        while rgbBins.count < 64 {
+            rgbBins.append(0)
+        }
+        
+        return Array(rgbBins.prefix(64))
+    }
+    
+    private func calculateChannelHistogram(from pixelBuffer: CVPixelBuffer, channel: Int) -> [CGFloat] {
+        // CPU-based calculation for individual color channels
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            return Array(repeating: 0, count: 64)
+        }
+        
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        
+        var histogram = Array<Int>(repeating: 0, count: 256)
+        
+        let pixels = baseAddress.bindMemory(to: UInt8.self, capacity: height * bytesPerRow)
+        
+        // Sample every 4th pixel for performance
+        for y in stride(from: 0, to: height, by: 4) {
+            for x in stride(from: 0, to: width, by: 4) {
+                let pixelIndex = y * bytesPerRow + x * 4
+                let channelValue = pixels[pixelIndex + channel]
+                histogram[Int(channelValue)] += 1
+            }
+        }
+        
+        // Convert to 64 bins and normalize
+        let bins = (0..<64).map { binIndex in
+            let startIndex = binIndex * 4
+            let endIndex = min(startIndex + 4, 256)
+            return histogram[startIndex..<endIndex].reduce(0, +)
+        }
+        
+        guard let maxValue = bins.max(), maxValue > 0 else {
+            return Array(repeating: 0, count: 64)
+        }
+        
+        return bins.map { CGFloat($0) / CGFloat(maxValue) }
     }
 
     func createMetalTexture(from pixelBuffer: CVPixelBuffer, using textureCache: CVMetalTextureCache) -> MTLTexture? {
