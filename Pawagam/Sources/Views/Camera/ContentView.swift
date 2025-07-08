@@ -95,14 +95,17 @@ struct ContentView: View {
         }
         .onAppear {
             viewModel.cameraManager.requestPermissions()
-            // Lock exposure when view appears
+            // Enforce manual exposure when view appears
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                viewModel.cameraManager.lockExposure()
+                viewModel.cameraManager.enforceManualExposure()
+                viewModel.cameraManager.startContinuousExposureEnforcement()
             }
             // Prevent screen dimming
             UIApplication.shared.isIdleTimerDisabled = true
         }
         .onDisappear {
+            // Stop continuous exposure enforcement
+            viewModel.cameraManager.stopContinuousExposureEnforcement()
             // Re-enable screen dimming when app goes away
             UIApplication.shared.isIdleTimerDisabled = false
         }

@@ -98,6 +98,7 @@ class CameraManager: NSObject, ObservableObject {
             guard !isCapturing else { return } // Prevent changes during capture
             if oldValue != iso {
                 updateExposureSettings()
+                enforceManualExposure() // Always enforce manual exposure
                 savePreferences()
             }
         }
@@ -109,6 +110,7 @@ class CameraManager: NSObject, ObservableObject {
             guard !isCapturing else { return }
             if oldValue != shutterAngle {
                 updateExposureSettings()
+                enforceManualExposure() // Always enforce manual exposure
                 savePreferences()
             }
         }
@@ -240,6 +242,9 @@ class CameraManager: NSObject, ObservableObject {
     // Focus Properties
     var focusTimer: Timer?
     let focusDuration: TimeInterval = 2.0
+    
+    // Exposure Control Properties
+    var continuousExposureTimer: Timer?
 
     // Capture Properties
     var captureTimer: DispatchSourceTimer?

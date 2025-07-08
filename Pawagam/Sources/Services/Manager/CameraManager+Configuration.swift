@@ -167,6 +167,12 @@ extension CameraManager {
             // Restart session
             self.captureSession.startRunning()
             
+            // Enforce manual exposure after camera change
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.updateExposureSettings()
+                self.enforceManualExposure()
+            }
+            
             // Update UI
             DispatchQueue.main.async {
                 self.currentCameraType = selectedCamera.deviceType == .builtInTelephotoCamera ? "Telephoto" :
@@ -322,7 +328,7 @@ extension CameraManager {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.updateExposureSettings()
-                self.lockExposure()
+                self.enforceManualExposure()
             }
         }
     }
@@ -334,13 +340,18 @@ extension CameraManager {
             do {
                 try device.lockForConfiguration()
                 
-                // Configure autofocus
+                // DISABLE ALL AUTOMATIC ADJUSTMENTS
+                device.automaticallyAdjustsVideoHDREnabled = false
+                
+                // Configure autofocus ONLY
                 if device.isFocusModeSupported(.continuousAutoFocus) {
                     device.focusMode = .continuousAutoFocus
                 }
 
-                // Configure auto white balance
-                if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                // LOCK WHITE BALANCE - NO AUTO ADJUSTMENTS
+                if device.isWhiteBalanceModeSupported(.locked) {
+                    device.whiteBalanceMode = .locked
+                } else if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
                     device.whiteBalanceMode = .continuousAutoWhiteBalance
                 }
 
@@ -352,12 +363,16 @@ extension CameraManager {
                     device.activeVideoMaxFrameDuration = CMTime(value: timeValue, timescale: timeScale)
                 }
                 
-                // MAINTAIN CUSTOM EXPOSURE MODE
-                if device.isExposureModeSupported(.custom) {
-                    device.exposureMode = .custom
+                // FORCE CUSTOM EXPOSURE MODE - NO AUTO EXPOSURE
+                device.exposureMode = .custom
+                
+                // DISABLE EXPOSURE POINT OF INTEREST
+                if device.isExposurePointOfInterestSupported {
+                    device.exposurePointOfInterest = CGPoint(x: 0.5, y: 0.5) // Center
+                    device.exposureMode = .custom // Ensure it stays custom
                 }
                 
-                // Apply exposure settings
+                // Apply manual exposure settings
                 let clampedISO = max(self.minISO, min(self.iso, self.maxISO))
                 device.setExposureModeCustom(
                     duration: self.desiredExposureDuration,

@@ -3,10 +3,9 @@ import Combine
 
 extension CameraManager {
     
-    // MARK: - Exposure Control
+    // MARK: - Manual Exposure Control (NO AUTO EXPOSURE)
     
     var desiredExposureDuration: CMTime {
-        // USE CURRENT TARGET FPS
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFPS))
         let exposureDurationSeconds = (shutterAngle / 360.0) * Double(frameDuration.seconds)
         return CMTime(seconds: exposureDurationSeconds, preferredTimescale: 1_000_000)
@@ -24,13 +23,12 @@ extension CameraManager {
             do {
                 try device.lockForConfiguration()
                 
-                // Force custom exposure mode
-                if device.isExposureModeSupported(.custom) {
-                    device.exposureMode = .custom
-                }
+                // FORCE CUSTOM EXPOSURE MODE - NO AUTO EXPOSURE
+                device.exposureMode = .custom
                 
-                // Set exposure using calculated duration and ISO
+                // Set manual exposure using user preferences
                 device.setExposureModeCustom(duration: self.desiredExposureDuration, iso: clampedISO)
+                
                 device.unlockForConfiguration()
                 
                 // Update published ISO if clamping occurred
@@ -40,7 +38,7 @@ extension CameraManager {
                     }
                 }
             } catch {
-                print("Error setting exposure: \(error.localizedDescription)")
+                print("Error setting manual exposure: \(error.localizedDescription)")
             }
         }
     }
@@ -49,73 +47,106 @@ extension CameraManager {
         $iso
             .dropFirst()
             .sink { [weak self] newISO in
-                self?.setExposure(iso: newISO)
+                self?.setManualExposure(iso: newISO)
             }
             .store(in: &cancellables)
 
         $shutterAngle
             .dropFirst()
             .sink { [weak self] newAngle in
-                self?.setShutterAngle(newAngle)
+                self?.setManualShutterAngle(newAngle)
             }
             .store(in: &cancellables)
     }
     
-    func setExposure(iso: Float) {
+    func setManualExposure(iso: Float) {
         guard let device = captureDevice else { return }
+        
+        let clampedISO = max(minISO, min(iso, maxISO))
 
-        do {
-            try device.lockForConfiguration()
-
-            // Set ISO
-            device.setExposureModeCustom(
-                duration: device.exposureDuration, iso: iso)
-
-            device.unlockForConfiguration()
-        } catch {
-            print("Error setting ISO: \(error.localizedDescription)")
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
+                
+                // MANUAL EXPOSURE ONLY - Keep current duration, set new ISO
+                device.setExposureModeCustom(duration: device.exposureDuration, iso: clampedISO)
+                
+                device.unlockForConfiguration()
+            } catch {
+                print("Error setting manual ISO: \(error.localizedDescription)")
+            }
         }
     }
 
-    func setShutterAngle(_ angle: Double) {
+    func setManualShutterAngle(_ angle: Double) {
         guard let device = captureDevice else { return }
 
-        do {
-            try device.lockForConfiguration()
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
 
-            // Calculate exposure duration from shutter angle
-            let frameDuration = CMTime(
-                value: 1, timescale: CMTimeScale(targetFPS))
-            let exposureDurationSeconds =
-                (angle / 360.0) * Double(frameDuration.seconds)
-            let exposureDuration = CMTime(
-                seconds: exposureDurationSeconds, preferredTimescale: 1_000_000)
+                // Calculate exposure duration from shutter angle
+                let frameDuration = CMTime(value: 1, timescale: CMTimeScale(self.targetFPS))
+                let exposureDurationSeconds = (angle / 360.0) * Double(frameDuration.seconds)
+                let exposureDuration = CMTime(seconds: exposureDurationSeconds, preferredTimescale: 1_000_000)
 
-            // Set exposure duration
-            device.setExposureModeCustom(
-                duration: exposureDuration, iso: device.iso)
+                // MANUAL EXPOSURE ONLY - Set duration, keep current ISO
+                device.setExposureModeCustom(duration: exposureDuration, iso: device.iso)
 
-            device.unlockForConfiguration()
-        } catch {
-            print("Error setting shutter angle: \(error.localizedDescription)")
+                device.unlockForConfiguration()
+            } catch {
+                print("Error setting manual shutter angle: \(error.localizedDescription)")
+            }
         }
     }
     
-    func lockExposure() {
+    func enforceManualExposure() {
         guard let device = captureDevice else { return }
         
-        do {
-            try device.lockForConfiguration()
-            
-            // Lock exposure at current values
-            if device.isExposureModeSupported(.locked) {
-                device.exposureMode = .locked
-                print("Exposure locked")
+        deviceConfigurationQueue.async {
+            do {
+                try device.lockForConfiguration()
+                
+                // AGGRESSIVE MANUAL EXPOSURE ENFORCEMENT
+                device.exposureMode = .custom
+                
+                // DISABLE ALL AUTO EXPOSURE FEATURES
+                if device.isExposurePointOfInterestSupported {
+                    device.exposurePointOfInterest = CGPoint(x: 0.5, y: 0.5)
+                }
+                
+                // FORCE MANUAL VALUES
+                device.setExposureModeCustom(duration: self.desiredExposureDuration, iso: self.iso)
+                
+                // ENSURE IT STAYS CUSTOM
+                device.exposureMode = .custom
+                
+                device.unlockForConfiguration()
+                print("✅ MANUAL EXPOSURE ENFORCED - ISO: \(self.iso), Shutter: \(self.shutterAngle)°, Mode: \(device.exposureMode.rawValue)")
+            } catch {
+                print("❌ Error enforcing manual exposure: \(error.localizedDescription)")
             }
-            
-            device.unlockForConfiguration()
-        } catch {
-            print("Error locking exposure: \(error.localizedDescription)")
         }
+    }
+    
+    func startContinuousExposureEnforcement() {
+        // Cancel any existing timer
+        continuousExposureTimer?.invalidate()
+        
+        // Start timer to continuously enforce manual exposure
+        continuousExposureTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self, let device = self.captureDevice else { return }
+            
+            // Check if exposure mode has changed from custom
+            if device.exposureMode != .custom {
+                print("⚠️ EXPOSURE MODE CHANGED TO: \(device.exposureMode.rawValue) - RE-ENFORCING MANUAL")
+                self.enforceManualExposure()
+            }
+        }
+    }
+    
+    func stopContinuousExposureEnforcement() {
+        continuousExposureTimer?.invalidate()
+        continuousExposureTimer = nil
     }
 } 
